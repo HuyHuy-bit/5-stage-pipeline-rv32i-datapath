@@ -2,8 +2,8 @@
 module if_id_reg (
     input  logic        clk,
     input  logic        rst,
-    input  logic         flush,      
-    input  logic         stall,      
+    input  logic         flush,      // squash on taken branch/jump (control hazard)
+    input  logic         stall,      // hold contents (load-use hazard - added Step 3)
     input  logic [31:0] pc_in,
     input  logic [31:0] pc_plus4_in,
     input  logic [31:0] instr_in,
@@ -16,11 +16,12 @@ module if_id_reg (
         if (rst || flush) begin
             pc_out       <= 32'd0;
             pc_plus4_out <= 32'd0;
-            instr_out    <= 32'd0;      
+            instr_out    <= 32'd0;      // all-zero = illegal opcode -> control.sv default -> NOP-like (no writes)
         end else if (!stall) begin
             pc_out       <= pc_in;
             pc_plus4_out <= pc_plus4_in;
             instr_out    <= instr_in;
         end
+        // else: stall holds current values (do nothing)
     end
 endmodule

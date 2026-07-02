@@ -2,7 +2,7 @@
 module id_ex_reg (
     input  logic        clk,
     input  logic        rst,
-    input  logic         flush,     // bubble insert 
+    input  logic         flush,     // bubble insert (control hazard from EX, or Step-3 hazard unit)
 
     // datapath values coming out of ID
     input  logic [31:0] pc_in,

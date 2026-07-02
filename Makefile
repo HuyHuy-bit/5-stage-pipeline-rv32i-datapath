@@ -3,7 +3,9 @@ TOP      = cpu
 TB       = cpu_tb.cpp
 
 CPU_SRCS = cpu.sv pc.sv instr_mem.sv reg_file.sv imm_gen.sv \
-           alu.sv control.sv data_mem.sv branch_unit.sv
+           alu.sv control.sv data_mem.sv branch_unit.sv \
+           if_id_reg.sv id_ex_reg.sv ex_mem_reg.sv mem_wb_reg.sv \
+           forwarding_unit.sv
 
 VFLAGS   = --cc --exe --build --trace -j 0 -Wno-UNUSEDSIGNAL
 OBJDIR   = obj_dir

@@ -16,8 +16,18 @@ module reg_file (
 );
     logic [31:0] reg_array [0:31];
 
-    assign rs1_data = (rs1_addr == 5'd0) ? 32'd0 : reg_array[rs1_addr];
-    assign rs2_data = (rs2_addr == 5'd0) ? 32'd0 : reg_array[rs2_addr];
+    // Read-during-write bypass: if WB is writing rd this exact cycle and ID
+    // is reading that same register this exact cycle, forward the incoming
+    // write data instead of the (stale, about-to-be-overwritten) array value.
+    // Without this, an instruction whose producer is exactly 3 instructions
+    // earlier reads garbage - the write and the read race on the same edge,
+    // and combinational read-before-write loses that race.
+    assign rs1_data = (rs1_addr == 5'd0) ? 32'd0
+                     : (rd_write_en && rd_addr != 5'd0 && rd_addr == rs1_addr) ? rd_data
+                     : reg_array[rs1_addr];
+    assign rs2_data = (rs2_addr == 5'd0) ? 32'd0
+                     : (rd_write_en && rd_addr != 5'd0 && rd_addr == rs2_addr) ? rd_data
+                     : reg_array[rs2_addr];
 
     // Debug taps exposed as proper ports (instead of hierarchical reach-in).
     assign dbg_x1 = reg_array[1];
