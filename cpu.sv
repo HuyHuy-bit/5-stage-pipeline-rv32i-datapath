@@ -1,4 +1,4 @@
-// cpu.sv - top-level module wiring all six blocks into a single-cycle RV32I CPU.
+// cpu.sv - top-level module: 5-stage pipelined RV32I CPU.
 
 module cpu (
     input  logic clk,
@@ -10,109 +10,187 @@ module cpu (
     output logic [31:0] dbg_x5
 );
 
-    // Internal wires - one per arrow between blocks.
-   logic [31:0] pc_out, next_pc, pc_plus4, branch_target, jalr_target, instr;
-   logic [31:0] reg_rs1_data, reg_rs2_data, imm, alu_a, alu_b, alu_result;
-   logic [31:0] mem_read_data, write_back_data;
-   logic    reg_write_en, alu_src, mem_write, mem_read, branch;
-   logic [3:0] alu_op;
-   logic    branch_taken;
-   // dedicated select signals for jumps / upper-immediates
-   logic [1:0] wb_src;       // 00=alu, 01=mem, 10=pc+4
-   logic [1:0] pc_src;       // 00=pc+4, 01=branch_target, 10=jalr_target
-   logic       alu_a_src;    // 0=rs1, 1=pc  (AUIPC)
+    // IF stage
+    logic [31:0] pc_out, next_pc, pc_plus4_if, instr_if;
 
-    // Instruction field extraction.
-    logic [6:0] opcode, funct7;
-    logic [2:0] funct3;
-    logic [4:0] rs1_addr, rs2_addr, rd_addr;
-    assign opcode   = instr[6:0];
-    assign rd_addr  = instr[11:7];
-    assign funct3   = instr[14:12];
-    assign rs1_addr = instr[19:15];
-    assign rs2_addr = instr[24:20];
-    assign funct7   = instr[31:25];
-
-    // Program counter
     pc u_pc ( .clk(clk), .rst(rst), .next_pc(next_pc), .pc_out(pc_out) );
+    assign pc_plus4_if = pc_out + 32'd4;
 
-    // next-PC logic
-    assign pc_plus4      = pc_out + 32'd4;
-    assign branch_target = pc_out + imm;                 // taken branch OR jal (pc + imm)
-    assign jalr_target   = (reg_rs1_data + imm) & ~32'd1; // jalr: rs1 + imm, bit 0 cleared
+    instr_mem u_instr_mem ( .addr(pc_out), .instr(instr_if) );
+    logic        ex_flush;
+    logic [31:0] ex_resolved_target;
 
-    branch_unit u_branch_unit (
-        .rs1(reg_rs1_data),
-        .rs2(reg_rs2_data),
-        .funct3(funct3),
-        .branch(branch),
-        .pc_sel(branch_taken)
+    assign next_pc = ex_flush ? ex_resolved_target : pc_plus4_if;
+
+    
+    // IF/ID register
+    logic [31:0] pc_id, pc_plus4_id, instr_id;
+    logic        stall_id; 
+
+    assign stall_id = 1'b0;
+
+    if_id_reg u_if_id (
+        .clk(clk), .rst(rst),
+        .flush(ex_flush),
+        .stall(stall_id),
+        .pc_in(pc_out), .pc_plus4_in(pc_plus4_if), .instr_in(instr_if),
+        .pc_out(pc_id), .pc_plus4_out(pc_plus4_id), .instr_out(instr_id)
     );
 
-    // pc_src: 00=pc+4, 01=branch (conditional), 10=jalr, 11=jal (unconditional)
-    // Branches need branch_taken; jal/jalr are always taken, so no gating.
-    always_comb begin
-        case (pc_src)
-            2'b01:   next_pc = branch_taken ? branch_target : pc_plus4; // conditional branch
-            2'b10:   next_pc = jalr_target;                            // jalr
-            2'b11:   next_pc = branch_target;                          // jal (pc + imm)
-            default: next_pc = pc_plus4;
-        endcase
-    end
+    
+    // ID stage 
+    logic [6:0] opcode_id, funct7_id;
+    logic [2:0] funct3_id;
+    logic [4:0] rs1_addr_id, rs2_addr_id, rd_addr_id;
+    assign opcode_id   = instr_id[6:0];
+    assign rd_addr_id  = instr_id[11:7];
+    assign funct3_id   = instr_id[14:12];
+    assign rs1_addr_id = instr_id[19:15];
+    assign rs2_addr_id = instr_id[24:20];
+    assign funct7_id   = instr_id[31:25];
 
-    // Instruction memory
-    instr_mem u_instr_mem ( .addr(pc_out), .instr(instr) );
+    logic        reg_write_en_id, alu_src_id, mem_write_id, mem_read_id, branch_id, alu_a_src_id;
+    logic [3:0]  alu_op_id;
+    logic [1:0]  pc_src_id, wb_src_id;
 
-    // Control unit
     control u_control (
-        .opcode(opcode), .funct3(funct3), .funct7(funct7),
-        .reg_write_en(reg_write_en), .alu_src(alu_src),
-        .mem_write(mem_write), .mem_read(mem_read),
-        .branch(branch), .pc_src(pc_src), .wb_src(wb_src), .alu_a_src(alu_a_src),
-        .alu_op(alu_op)
+        .opcode(opcode_id), .funct3(funct3_id), .funct7(funct7_id),
+        .reg_write_en(reg_write_en_id), .alu_src(alu_src_id),
+        .mem_write(mem_write_id), .mem_read(mem_read_id),
+        .branch(branch_id), .pc_src(pc_src_id), .wb_src(wb_src_id),
+        .alu_a_src(alu_a_src_id), .alu_op(alu_op_id)
     );
 
+    logic [31:0] reg_rs1_data_id, reg_rs2_data_id;
+    logic [31:0] write_back_data;
 
-    // Register file
     reg_file u_reg_file (
         .clk(clk), .rst(rst),
-        .rs1_addr(rs1_addr), .rs2_addr(rs2_addr), .rd_addr(rd_addr),
-        .rd_data(write_back_data), .rd_write_en(reg_write_en),
-        .rs1_data(reg_rs1_data), .rs2_data(reg_rs2_data),
+        .rs1_addr(rs1_addr_id), .rs2_addr(rs2_addr_id), .rd_addr(rd_addr_wb),
+        .rd_data(write_back_data), .rd_write_en(reg_write_en_wb),
+        .rs1_data(reg_rs1_data_id), .rs2_data(reg_rs2_data_id),
         .dbg_x1(dbg_x1), .dbg_x2(dbg_x2), .dbg_x3(dbg_x3),
         .dbg_x4(dbg_x4), .dbg_x5(dbg_x5)
     );
 
-    // ---- Immediate Generator ----
-    imm_gen u_imm_gen ( .instr(instr), .imm(imm) );
+    logic [31:0] imm_id;
+    imm_gen u_imm_gen ( .instr(instr_id), .imm(imm_id) );
 
-    // ---- ALU-source muxes ----
-    assign alu_a = (alu_a_src) ? pc_out : reg_rs1_data;  // AUIPC uses pc as operand a
-    assign alu_b = (alu_src)   ? imm    : reg_rs2_data;
+    
+    // ID/EX register 
+    logic [31:0] pc_ex, pc_plus4_ex, rs1_data_ex, rs2_data_ex, imm_ex;
+    logic [4:0]  rs1_addr_ex, rs2_addr_ex, rd_addr_ex;
+    logic [2:0]  funct3_ex;
+    logic        reg_write_en_ex, alu_src_ex, alu_a_src_ex, mem_write_ex, mem_read_ex, branch_ex;
+    logic [3:0]  alu_op_ex;
+    logic [1:0]  pc_src_ex, wb_src_ex;
 
-    // ---- ALU ----
+    id_ex_reg u_id_ex (
+        .clk(clk), .rst(rst), .flush(ex_flush),
+        .pc_in(pc_id), .pc_plus4_in(pc_plus4_id),
+        .rs1_data_in(reg_rs1_data_id), .rs2_data_in(reg_rs2_data_id), .imm_in(imm_id),
+        .rs1_addr_in(rs1_addr_id), .rs2_addr_in(rs2_addr_id), .rd_addr_in(rd_addr_id),
+        .funct3_in(funct3_id),
+        .reg_write_en_in(reg_write_en_id), .alu_src_in(alu_src_id), .alu_a_src_in(alu_a_src_id),
+        .alu_op_in(alu_op_id), .mem_write_in(mem_write_id), .mem_read_in(mem_read_id),
+        .branch_in(branch_id), .pc_src_in(pc_src_id), .wb_src_in(wb_src_id),
+
+        .pc_out(pc_ex), .pc_plus4_out(pc_plus4_ex),
+        .rs1_data_out(rs1_data_ex), .rs2_data_out(rs2_data_ex), .imm_out(imm_ex),
+        .rs1_addr_out(rs1_addr_ex), .rs2_addr_out(rs2_addr_ex), .rd_addr_out(rd_addr_ex),
+        .funct3_out(funct3_ex),
+        .reg_write_en_out(reg_write_en_ex), .alu_src_out(alu_src_ex), .alu_a_src_out(alu_a_src_ex),
+        .alu_op_out(alu_op_ex), .mem_write_out(mem_write_ex), .mem_read_out(mem_read_ex),
+        .branch_out(branch_ex), .pc_src_out(pc_src_ex), .wb_src_out(wb_src_ex)
+    );
+
+    
+    // EX stage
+    logic [31:0] alu_a_ex, alu_b_ex, alu_result_ex;
+    assign alu_a_ex = alu_a_src_ex ? pc_ex : rs1_data_ex;
+    assign alu_b_ex = alu_src_ex   ? imm_ex : rs2_data_ex;
+
     alu u_alu (
-        .a(alu_a), .b(alu_b), .alu_op(alu_op),
-        .result(alu_result), .zero()
+        .a(alu_a_ex), .b(alu_b_ex), .alu_op(alu_op_ex),
+        .result(alu_result_ex), .zero()
     );
 
-    // ---- Data Memory ----
-    data_mem u_data_mem (
-        .clk(clk), .mem_write(mem_write), .mem_read(mem_read),
-        .funct3(funct3),
-        .addr(alu_result), .write_data(reg_rs2_data),
-        .read_data(mem_read_data)
+    logic branch_taken_ex;
+    branch_unit u_branch_unit (
+        .rs1(rs1_data_ex), .rs2(rs2_data_ex), .funct3(funct3_ex),
+        .branch(branch_ex), .pc_sel(branch_taken_ex)
     );
 
-    // ---- Write-back mux: ALU result, loaded value, or return address (pc+4) ----
+    logic [31:0] branch_target_ex, jalr_target_ex;
+    assign branch_target_ex = pc_ex + imm_ex;
+    assign jalr_target_ex   = (rs1_data_ex + imm_ex) & ~32'd1;
+     // pc_src_ex: 00=none(sequential), 01=conditional branch, 10=jalr, 11=jal
     always_comb begin
-        case (wb_src)
-            2'b01:   write_back_data = mem_read_data; // loads
-            2'b10:   write_back_data = pc_plus4;      // jal / jalr return address
-            default: write_back_data = alu_result;    // r/i/lui/auipc
+        case (pc_src_ex)
+            2'b01:   begin ex_flush = branch_taken_ex; ex_resolved_target = branch_target_ex; end
+            2'b10:   begin ex_flush = 1'b1;            ex_resolved_target = jalr_target_ex;   end
+            2'b11:   begin ex_flush = 1'b1;            ex_resolved_target = branch_target_ex; end
+            default: begin ex_flush = 1'b0;            ex_resolved_target = 32'd0;            end
         endcase
     end
 
-    // ---- debug taps ----
-    // ---- debug taps now come from reg_file's dbg_* output ports ----
+    
+    // EX/MEM register
+    logic [31:0] alu_result_mem, rs2_data_mem, pc_plus4_mem;
+    logic [4:0]  rd_addr_mem;
+    logic [2:0]  funct3_mem;
+    logic        reg_write_en_mem, mem_write_mem, mem_read_mem;
+    logic [1:0]  wb_src_mem;
+
+    ex_mem_reg u_ex_mem (
+        .clk(clk), .rst(rst),
+        .alu_result_in(alu_result_ex), .rs2_data_in(rs2_data_ex), .pc_plus4_in(pc_plus4_ex),
+        .rd_addr_in(rd_addr_ex), .funct3_in(funct3_ex),
+        .reg_write_en_in(reg_write_en_ex), .mem_write_in(mem_write_ex), .mem_read_in(mem_read_ex),
+        .wb_src_in(wb_src_ex),
+
+        .alu_result_out(alu_result_mem), .rs2_data_out(rs2_data_mem), .pc_plus4_out(pc_plus4_mem),
+        .rd_addr_out(rd_addr_mem), .funct3_out(funct3_mem),
+        .reg_write_en_out(reg_write_en_mem), .mem_write_out(mem_write_mem), .mem_read_out(mem_read_mem),
+        .wb_src_out(wb_src_mem)
+    );
+
+    
+    // MEM stage
+    logic [31:0] mem_read_data_mem;
+    data_mem u_data_mem (
+        .clk(clk), .mem_write(mem_write_mem), .mem_read(mem_read_mem),
+        .funct3(funct3_mem),
+        .addr(alu_result_mem), .write_data(rs2_data_mem),
+        .read_data(mem_read_data_mem)
+    );
+
+    
+    // MEM/WB register
+    logic [31:0] mem_read_data_wb, alu_result_wb, pc_plus4_wb;
+    logic [4:0]  rd_addr_wb;
+    logic        reg_write_en_wb;
+    logic [1:0]  wb_src_wb;
+
+    mem_wb_reg u_mem_wb (
+        .clk(clk), .rst(rst),
+        .mem_read_data_in(mem_read_data_mem), .alu_result_in(alu_result_mem), .pc_plus4_in(pc_plus4_mem),
+        .rd_addr_in(rd_addr_mem),
+        .reg_write_en_in(reg_write_en_mem), .wb_src_in(wb_src_mem),
+
+        .mem_read_data_out(mem_read_data_wb), .alu_result_out(alu_result_wb), .pc_plus4_out(pc_plus4_wb),
+        .rd_addr_out(rd_addr_wb),
+        .reg_write_en_out(reg_write_en_wb), .wb_src_out(wb_src_wb)
+    );
+
+    
+    // WB stage
+    always_comb begin
+        case (wb_src_wb)
+            2'b01:   write_back_data = mem_read_data_wb; 
+            2'b10:   write_back_data = pc_plus4_wb;      
+            default: write_back_data = alu_result_wb;    
+        endcase
+    end
+
 endmodule
