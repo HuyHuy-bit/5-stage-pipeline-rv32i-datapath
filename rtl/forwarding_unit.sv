@@ -34,4 +34,4 @@ module forwarding_unit (
     end
 endmodule
 
-`default_nettype wires
+`default_nettype wire
