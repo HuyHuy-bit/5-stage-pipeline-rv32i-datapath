@@ -1,3 +1,5 @@
+`default_nettype none
+
 // mem_wb_reg.sv - latches load data + ALU result + control into the WB stage.
 module mem_wb_reg (
     input  logic        clk,
@@ -41,3 +43,5 @@ module mem_wb_reg (
         end
     end
 endmodule
+
+`default_nettype wire

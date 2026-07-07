@@ -1,3 +1,5 @@
+`default_nettype none
+
 // if_id_reg.sv - latches fetched instruction + PC into the ID stage.
 module if_id_reg (
     input  logic        clk,
@@ -28,3 +30,5 @@ module if_id_reg (
         // else: stall holds current values (do nothing, including valid_out)
     end
 endmodule
+
+`default_nettype wire

@@ -1,3 +1,5 @@
+`default_nettype none
+
 module data_mem (
     input  logic        clk,          // clock
     input  logic        mem_write,    // 1 when storing
@@ -73,3 +75,5 @@ module data_mem (
         end
     end
 endmodule
+
+`default_nettype wire

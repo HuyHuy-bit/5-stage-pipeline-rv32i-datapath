@@ -1,5 +1,6 @@
-// cpu.sv - top-level module: 5-stage pipelined RV32I CPU.
+`default_nettype none
 
+// cpu.sv - top-level module: 5-stage pipelined RV32I CPU.
 module cpu (
     input  logic clk,
     input  logic rst,
@@ -157,7 +158,7 @@ module cpu (
 
     alu u_alu (
         .a(alu_a_ex), .b(alu_b_ex), .alu_op(alu_op_ex),
-        .result(alu_result_ex), .zero()
+        .result(alu_result_ex)
     );
 
     logic branch_taken_ex;
@@ -257,3 +258,5 @@ module cpu (
     end
 
 endmodule
+
+`default_nettype wire

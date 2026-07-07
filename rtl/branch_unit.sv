@@ -1,3 +1,5 @@
+`default_nettype none
+
 module branch_unit (
     input logic [31:0] rs1,
     input logic [31:0] rs2,
@@ -19,3 +21,5 @@ module branch_unit (
     end
     assign pc_sel = branch & branch_taken;
 endmodule
+
+`default_nettype wire

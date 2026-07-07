@@ -1,3 +1,5 @@
+`default_nettype none
+
 // id_ex_reg.sv - latches decoded operands + control signals into the EX stage.
 module id_ex_reg (
     input  logic        clk,
@@ -94,3 +96,5 @@ module id_ex_reg (
         end
     end
 endmodule
+
+`default_nettype wire

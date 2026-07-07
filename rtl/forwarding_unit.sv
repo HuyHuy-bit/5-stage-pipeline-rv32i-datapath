@@ -1,3 +1,5 @@
+`default_nettype none
+
 // forwarding_unit.sv - decides whether the EX stage's rs1/rs2 operands should
 // come from the register file (via ID/EX) or be bypassed from a later stage.
 module forwarding_unit (
@@ -31,3 +33,5 @@ module forwarding_unit (
             forward_b = 2'b00;
     end
 endmodule
+
+`default_nettype wires

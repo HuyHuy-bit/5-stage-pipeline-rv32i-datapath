@@ -1,3 +1,5 @@
+`default_nettype none
+
 // ex_mem_reg.sv - latches ALU result + store data + control into the MEM stage.
 module ex_mem_reg (
     input  logic        clk,
@@ -53,3 +55,5 @@ module ex_mem_reg (
         end
     end
 endmodule
+
+`default_nettype wire

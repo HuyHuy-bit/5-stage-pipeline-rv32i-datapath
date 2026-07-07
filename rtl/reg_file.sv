@@ -1,3 +1,5 @@
+`default_nettype none
+
 module reg_file (
     input  logic        clk,
     input  logic        rst,
@@ -23,7 +25,7 @@ module reg_file (
     assign rs2_data = (rs2_addr == 5'd0) ? 32'd0
                      : (rd_write_en && rd_addr != 5'd0 && rd_addr == rs2_addr) ? rd_data
                      : reg_array[rs2_addr];
- 
+
     // Debug taps removed — the testbench reads all 32 registers directly via
     // the simulator's hierarchical root (cpu_tb.cpp), so these ports were
     // dead weight left over from the single-cycle predecessor.
@@ -37,3 +39,5 @@ module reg_file (
         end
     end
 endmodule
+
+`default_nettype wire

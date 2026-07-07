@@ -2,12 +2,13 @@
 TOP      = cpu
 TB       = cpu_tb.cpp
 
-CPU_SRCS = rtl/cpu.sv rtl/pc.sv rtl/instr_mem.sv rtl/reg_file.sv rtl/imm_gen.sv \
-           rtl/alu.sv rtl/control.sv rtl/data_mem.sv rtl/branch_unit.sv \
-           rtl/if_id_reg.sv rtl/id_ex_reg.sv rtl/ex_mem_reg.sv rtl/mem_wb_reg.sv \
-           rtl/forwarding_unit.sv rtl/hazard_detect.sv
+CPU_SRCS = rv32i_pkg.sv \
+           cpu.sv pc.sv instr_mem.sv reg_file.sv imm_gen.sv \
+           alu.sv control.sv data_mem.sv branch_unit.sv \
+           if_id_reg.sv id_ex_reg.sv ex_mem_reg.sv mem_wb_reg.sv \
+           forwarding_unit.sv hazard_detect.sv
 
-VFLAGS   = --cc --exe --build --trace -j 0 -Wno-UNUSEDSIGNAL
+VFLAGS   = --cc --exe --build --trace -j 0
 OBJDIR   = obj_dir
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
@@ -51,7 +52,7 @@ test: sim assemble
 
 # Lint only — quick syntax/structure check.
 lint:
-	verilator --lint-only -Wno-UNUSEDSIGNAL --top-module $(TOP) $(CPU_SRCS)
+	verilator --lint-only --top-module $(TOP) $(CPU_SRCS)
 
 # Open a specific test waveform: make wave TEST=t04_branch
 TEST ?= t01_rtype
