@@ -16,6 +16,7 @@ package rv32i_pkg;
     localparam logic [6:0] OPCODE_JALR   = 7'b1100111;
     localparam logic [6:0] OPCODE_LUI    = 7'b0110111;
     localparam logic [6:0] OPCODE_AUIPC  = 7'b0010111;
+    localparam logic [6:0] OPCODE_FENCE  = 7'b0001111;
 
     // ---- ALU operation codes (control.sv -> alu.sv, the alu_op field) ----
     localparam logic [3:0] ALU_OP_ADD  = 4'b0000;

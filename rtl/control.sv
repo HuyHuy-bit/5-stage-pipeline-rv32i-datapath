@@ -93,6 +93,8 @@ module control (
                 alu_a_src       = 1'b1;
                 alu_decode_mode = ALU_ADD;
             end
+            OPCODE_FENCE: begin
+            end
             OPCODE_SYSTEM: begin
                 if (funct3 == F3_PRIV) begin
                     // ECALL / EBREAK / MRET - no register write, no ALU use.
