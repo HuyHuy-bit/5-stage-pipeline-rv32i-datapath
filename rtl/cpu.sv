@@ -4,9 +4,6 @@
 module cpu (
     input  logic clk,
     input  logic rst,
-
-    // Performance counters (Section 16 "easy wins": cycle-count / instret /
-    // stall counters -> a CPI summary the testbench prints at the end).
     output logic [31:0] perf_cycle_count,
     output logic [31:0] perf_instr_retired,
     output logic [31:0] perf_stall_count,
