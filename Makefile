@@ -13,7 +13,7 @@ OBJDIR   = obj_dir
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
 
-TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal
+TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
 .PHONY: all sim assemble test lint wave clean

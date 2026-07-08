@@ -4,6 +4,9 @@
 module cpu (
     input  logic clk,
     input  logic rst,
+
+    // Performance counters (Section 16 "easy wins": cycle-count / instret /
+    // stall counters -> a CPI summary the testbench prints at the end).
     output logic [31:0] perf_cycle_count,
     output logic [31:0] perf_instr_retired,
     output logic [31:0] perf_stall_count,
@@ -194,19 +197,33 @@ module cpu (
         .forward_a(forward_a), .forward_b(forward_b)
     );
 
+    // The value the EX/MEM stage will actually write back: for a CSR
+    // instruction it's the old CSR value, otherwise the ALU result. Forwarding
+    // must use THIS, not raw alu_result_mem, or a CSR read forwarded to the
+    // next instruction delivers garbage.
+    logic [31:0] mem_fwd_value;
+    assign mem_fwd_value = is_csr_mem ? csr_rdata_commit : alu_result_mem;
+
     logic [31:0] rs1_data_ex_fwd, rs2_data_ex_fwd;
     always_comb begin
         case (forward_a)
-            2'b01:   rs1_data_ex_fwd = alu_result_mem;   // from EX/MEM
+            2'b01:   rs1_data_ex_fwd = mem_fwd_value;    // from EX/MEM (CSR-aware)
             2'b10:   rs1_data_ex_fwd = write_back_data;  // from MEM/WB (WB-stage mux output)
             default: rs1_data_ex_fwd = rs1_data_ex;      // no hazard - use registered value
         endcase
         case (forward_b)
-            2'b01:   rs2_data_ex_fwd = alu_result_mem;
+            2'b01:   rs2_data_ex_fwd = mem_fwd_value;
             2'b10:   rs2_data_ex_fwd = write_back_data;
             default: rs2_data_ex_fwd = rs2_data_ex;
         endcase
     end
+
+    // CSR write data must use the FORWARDED rs1 (register variants), else a
+    // csrrw right after an instruction producing rs1 captures a stale value.
+    // Immediate variants (funct3[2]==1) use the uimm carried from ID, hazard-free.
+    logic [31:0] csr_wdata_ex_fwd;
+    assign csr_wdata_ex_fwd = funct3_ex[2] ? csr_wdata_ex   // uimm (from ID, no hazard)
+                                           : rs1_data_ex_fwd; // register variant (forwarded)
 
     logic [31:0] alu_a_ex, alu_b_ex, alu_result_ex;
     assign alu_a_ex = alu_a_src_ex ? pc_ex : rs1_data_ex_fwd;
@@ -293,6 +310,18 @@ module cpu (
         if (valid_ex && illegal_ex) begin
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
+        end else if (valid_ex && mem_read_ex) begin
+            if ((funct3_ex[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
+                (funct3_ex[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
+                exc_pending_ex = 1'b1;
+                exc_cause_ex   = CAUSE_MISALIGNED_LOAD;
+            end
+        end else if (valid_ex && mem_write_ex) begin
+            if ((funct3_ex[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
+                (funct3_ex[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
+                exc_pending_ex = 1'b1;
+                exc_cause_ex   = CAUSE_MISALIGNED_STORE;
+            end
         end
     end
 
@@ -328,7 +357,7 @@ module cpu (
         .pc_in(pc_ex), .exc_pending_in(exc_pending_ex), .exc_cause_in(exc_cause_ex),
         .is_csr_in(is_csr_ex), .is_system_in(is_system_ex),
         .csr_addr_in(csr_addr_ex), .csr_funct3_in(funct3_ex),
-        .csr_wdata_in(csr_wdata_ex), .csr_rdata_in(csr_rdata_ex), .instr_in(instr_ex),
+        .csr_wdata_in(csr_wdata_ex_fwd), .csr_rdata_in(csr_rdata_ex), .instr_in(instr_ex),
 
         .alu_result_out(alu_result_mem), .rs2_data_out(rs2_data_mem), .pc_plus4_out(pc_plus4_mem),
         .rd_addr_out(rd_addr_mem), .funct3_out(funct3_mem),
@@ -341,9 +370,12 @@ module cpu (
     );
 
     // MEM stage
+    logic mem_write_mem_gated;
+    assign mem_write_mem_gated = mem_write_mem && !(valid_mem && exc_pending_mem);
+
     logic [31:0] mem_read_data_mem;
     data_mem u_data_mem (
-        .clk(clk), .mem_write(mem_write_mem), .mem_read(mem_read_mem),
+        .clk(clk), .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
         .funct3(funct3_mem),
         .addr(alu_result_mem), .write_data(rs2_data_mem),
         .read_data(mem_read_data_mem)
@@ -413,7 +445,7 @@ module cpu (
     // OLD csr value. We fold it into the MEM-stage alu_result feeding MEM/WB,
     // since a CSR instruction doesn't use the ALU result for anything else.
     logic [31:0] mem_result_for_wb;
-    assign mem_result_for_wb = is_csr_mem ? csr_rdata_commit : alu_result_mem;
+    assign mem_result_for_wb = mem_fwd_value;  // same value used for forwarding
 
     // MEM/WB register
     logic [31:0] mem_read_data_wb, alu_result_wb, pc_plus4_wb;
