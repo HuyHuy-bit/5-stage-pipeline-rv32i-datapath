@@ -14,7 +14,7 @@ MEMORY
     RAM (wxa) : ORIGIN = 0x00010000, LENGTH = 0x10000   /* 64KB -> data_mem  */
 }
 
-ENTRY(_start)
+ENTRY(rvtest_entry_point)
 
 SECTIONS
 {
