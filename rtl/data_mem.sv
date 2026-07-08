@@ -10,7 +10,7 @@ module data_mem (
     output logic [31:0] read_data     // value loaded (already extended)
 );
     // Word-addressed array; subword access handled via per-byte write strobes.
-    logic [31:0] mem_array [0:1023];
+    logic [31:0] mem_array [0:16383];
 
     // funct3 size encodings (low 2 bits = width; bit2 = unsigned for loads)
     localparam [2:0] F3_B  = 3'b000; // lb  / sb
@@ -19,9 +19,9 @@ module data_mem (
     localparam [2:0] F3_BU = 3'b100; // lbu
     localparam [2:0] F3_HU = 3'b101; // lhu
 
-    logic [9:0]  word_idx;
+    logic [13:0] word_idx;
     logic [1:0]  byte_off;
-    assign word_idx = addr[11:2];   // which 32-bit word
+    assign word_idx = addr[15:2];   // which 32-bit word
     assign byte_off = addr[1:0];    // which byte within the word
 
     // STORE: byte-enable generation
