@@ -310,16 +310,15 @@ module cpu #(
     assign jalr_target_ex   = (rs1_data_ex_fwd + imm_ex) & ~32'd1;
 
     // Resolve the actual control-flow outcome in EX.
-    // pc_src_ex: 00=none(sequential), 01=conditional branch, 10=jalr, 11=jal
     logic        actual_taken;      // did this instruction actually redirect?
     logic [31:0] actual_target;     // ...and to where
     logic        is_cf_instr;       // is this a control-flow instruction at all?
     always_comb begin
         case (pc_src_ex)
-            2'b01:   begin actual_taken = branch_taken_ex; actual_target = branch_target_ex; is_cf_instr = 1'b1; end
-            2'b10:   begin actual_taken = 1'b1;            actual_target = jalr_target_ex;   is_cf_instr = 1'b1; end
-            2'b11:   begin actual_taken = 1'b1;            actual_target = branch_target_ex; is_cf_instr = 1'b1; end
-            default: begin actual_taken = 1'b0;            actual_target = 32'd0;            is_cf_instr = 1'b0; end
+            PC_SRC_BRANCH: begin actual_taken = branch_taken_ex; actual_target = branch_target_ex; is_cf_instr = 1'b1; end
+            PC_SRC_JALR:   begin actual_taken = 1'b1;            actual_target = jalr_target_ex;   is_cf_instr = 1'b1; end
+            PC_SRC_JAL:    begin actual_taken = 1'b1;            actual_target = branch_target_ex; is_cf_instr = 1'b1; end
+            default:       begin actual_taken = 1'b0;            actual_target = 32'd0;            is_cf_instr = 1'b0; end
         endcase
     end
 
@@ -602,9 +601,9 @@ module cpu #(
     // WB stage
     always_comb begin
         case (wb_src_wb)
-            2'b01:   write_back_data = mem_read_data_wb; // loads
-            2'b10:   write_back_data = pc_plus4_wb;      // jal / jalr return address
-            default: write_back_data = alu_result_wb;    // r/i/lui/auipc
+            WB_SRC_MEM: write_back_data = mem_read_data_wb; // loads
+            WB_SRC_PC4: write_back_data = pc_plus4_wb;      // jal / jalr return address
+            default:    write_back_data = alu_result_wb;    // r/i/lui/auipc, and CSR (folded in above)
         endcase
     end
 
@@ -744,13 +743,13 @@ module cpu #(
 
     // control-flow type (pc_src_ex) x taken/not-taken
     c_branch_taken:    cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == 2'b01 && actual_taken);
+        cov_en && valid_ex && pc_src_ex == PC_SRC_BRANCH && actual_taken);
     c_branch_nottaken: cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == 2'b01 && !actual_taken);
+        cov_en && valid_ex && pc_src_ex == PC_SRC_BRANCH && !actual_taken);
     c_jalr:            cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == 2'b10);
+        cov_en && valid_ex && pc_src_ex == PC_SRC_JALR);
     c_jal:              cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == 2'b11);
+        cov_en && valid_ex && pc_src_ex == PC_SRC_JAL);
 
     // trap cause, each implemented cause hit at least once
     c_cause_illegal:    cover property (@(posedge clk) disable iff (rst)

@@ -1,10 +1,12 @@
 `verilator_config
 
-// import rv32i_pkg::*; is deliberate: one shared package, four consumers.
+// import rv32i_pkg::*; is deliberate: one shared package, six consumers.
 lint_off -rule IMPORTSTAR -file "*/alu.sv"
 lint_off -rule IMPORTSTAR -file "*/control.sv"
 lint_off -rule IMPORTSTAR -file "*/csr.sv"
 lint_off -rule IMPORTSTAR -file "*/imm_gen.sv"
+lint_off -rule IMPORTSTAR -file "*/branch_unit.sv"
+lint_off -rule IMPORTSTAR -file "*/lsu.sv"
 
 // csr_rdata_mem is latched for a future CSR-forwarding path, not read yet.
 lint_off -rule UNUSEDSIGNAL -file "*/cpu.sv" -match "*csr_rdata_mem*"

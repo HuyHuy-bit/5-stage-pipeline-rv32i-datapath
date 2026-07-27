@@ -32,8 +32,8 @@ module control (
         mem_write       = 1'b0;
         mem_read        = 1'b0;
         branch          = 1'b0;
-        wb_src          = 2'b00;
-        pc_src          = 2'b00;
+        wb_src          = WB_SRC_ALU;
+        pc_src          = PC_SRC_SEQ;
         alu_a_src       = 1'b0;
         is_csr          = 1'b0;
         is_system       = 1'b0;
@@ -55,7 +55,7 @@ module control (
                 reg_write_en    = 1'b1;
                 alu_src         = 1'b1;
                 mem_read        = 1'b1;
-                wb_src          = 2'b01;
+                wb_src          = WB_SRC_MEM;
                 alu_decode_mode = ALU_ADD;
             end
             OPCODE_STORE: begin
@@ -66,19 +66,19 @@ module control (
             OPCODE_BRANCH: begin
                 alu_src         = 1'b0;
                 branch          = 1'b1;
-                pc_src          = 2'b01;
+                pc_src          = PC_SRC_BRANCH;
                 alu_decode_mode = ALU_SUB;
             end
             OPCODE_JAL: begin
                 reg_write_en    = 1'b1;
-                wb_src          = 2'b10;
-                pc_src          = 2'b11;
+                wb_src          = WB_SRC_PC4;
+                pc_src          = PC_SRC_JAL;
                 alu_decode_mode = ALU_ADD;
             end
             OPCODE_JALR: begin
                 reg_write_en    = 1'b1;
-                wb_src          = 2'b10;
-                pc_src          = 2'b10;
+                wb_src          = WB_SRC_PC4;
+                pc_src          = PC_SRC_JALR;
                 alu_src         = 1'b1;
                 alu_decode_mode = ALU_ADD;
             end
@@ -103,7 +103,7 @@ module control (
                     // CSRRW/S/C and immediate forms: read old CSR into rd.
                     is_csr       = 1'b1;
                     reg_write_en = 1'b1;
-                    wb_src       = 2'b11;   // new WB source: CSR read data
+                    wb_src       = WB_SRC_CSR;
                 end
             end
             default: begin

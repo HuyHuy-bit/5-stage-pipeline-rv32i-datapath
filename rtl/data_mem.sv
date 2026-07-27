@@ -5,7 +5,8 @@
 `default_nettype none
 
 module data_mem #(
-    parameter int LATENCY = 1
+    parameter int LATENCY     = 1,
+    parameter int DEPTH_WORDS = 16384
 ) (
     input  logic        clk,
     input  logic        rst,
@@ -17,8 +18,10 @@ module data_mem #(
     output logic [31:0] read_word,
     output logic        ready
 );
+    localparam int WORDW = $clog2(DEPTH_WORDS);
+
     // Word-addressed array; subword access handled via per-byte write strobes.
-    logic [31:0] mem_array [0:16383];
+    logic [31:0] mem_array [0:DEPTH_WORDS-1];
 
     string data_file;
     initial begin
@@ -27,8 +30,14 @@ module data_mem #(
         end
     end
 
-    logic [13:0] word_idx;
-    assign word_idx = addr[15:2];
+    // Only the low bits are decoded; bits above them are deliberately
+    // ignored, not validated. The linker script places RAM at 0x00300000
+    // specifically so this aliases back into word 0 upward — see
+    // compliance/link/rv32i-pipeline.ld's header comment. An "address in
+    // range" assertion here would be checking the RTL against a premise the
+    // rest of the system doesn't hold.
+    logic [WORDW-1:0] word_idx;
+    assign word_idx = addr[WORDW+1:2];
 
     mem_timing #(.LATENCY(LATENCY)) u_timing (
         .clk(clk), .rst(rst),

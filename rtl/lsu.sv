@@ -10,6 +10,8 @@
 // its own copy of exactly this logic, so it moved out here instead.
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module lsu (
     input  var logic [2:0]  funct3,       // access size + signedness
     input  var logic [1:0]  byte_off,     // addr[1:0]
@@ -22,12 +24,9 @@ module lsu (
     output var logic [31:0] store_word,   // store_data shifted into its lane
     output var logic [31:0] load_data     // extracted and extended
 );
-    // funct3 size encodings (low 2 bits = width; bit2 = unsigned for loads)
-    localparam [2:0] F3_B  = 3'b000; // lb  / sb
-    localparam [2:0] F3_H  = 3'b001; // lh  / sh
-    localparam [2:0] F3_W  = 3'b010; // lw  / sw
-    localparam [2:0] F3_BU = 3'b100; // lbu
-    localparam [2:0] F3_HU = 3'b101; // lhu
+    // funct3 size encodings (F3_LB/F3_LH/F3_LW/F3_LBU/F3_LHU) live in
+    // rv32i_pkg.sv now — was a local copy, same duplication problem the
+    // package exists to solve.
 
     // STORE: byte-enable generation.
     // byte_en[i] = 1 means lane i (bits [8i+7 : 8i]) gets written.
@@ -35,9 +34,9 @@ module lsu (
         byte_en = 4'b0000;
         if (mem_write) begin
             case (funct3)
-                F3_B:    byte_en = 4'b0001 << byte_off;   // sb: one lane
-                F3_H:    byte_en = 4'b0011 << byte_off;   // sh: two lanes (off = 0 or 2)
-                F3_W:    byte_en = 4'b1111;               // sw: all four
+                F3_LB:   byte_en = 4'b0001 << byte_off;   // sb: one lane
+                F3_LH:   byte_en = 4'b0011 << byte_off;   // sh: two lanes (off = 0 or 2)
+                F3_LW:   byte_en = 4'b1111;               // sw: all four
                 default: byte_en = 4'b0000;
             endcase
         end
@@ -56,11 +55,11 @@ module lsu (
     always_comb begin
         if (mem_read) begin
             case (funct3)
-                F3_B:    load_data = {{24{sel_byte[7]}},  sel_byte};  // lb  (sign-ext)
-                F3_H:    load_data = {{16{sel_half[15]}}, sel_half};  // lh  (sign-ext)
-                F3_W:    load_data = mem_word;                        // lw
-                F3_BU:   load_data = {24'b0, sel_byte};               // lbu (zero-ext)
-                F3_HU:   load_data = {16'b0, sel_half};               // lhu (zero-ext)
+                F3_LB:   load_data = {{24{sel_byte[7]}},  sel_byte};  // lb  (sign-ext)
+                F3_LH:   load_data = {{16{sel_half[15]}}, sel_half};  // lh  (sign-ext)
+                F3_LW:   load_data = mem_word;                        // lw
+                F3_LBU:  load_data = {24'b0, sel_byte};               // lbu (zero-ext)
+                F3_LHU:  load_data = {16'b0, sel_half};               // lhu (zero-ext)
                 default: load_data = mem_word;
             endcase
         end else begin

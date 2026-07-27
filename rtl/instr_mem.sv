@@ -6,7 +6,8 @@
 `default_nettype none
 
 module instr_mem #(
-    parameter int LATENCY = 1
+    parameter int LATENCY     = 1,
+    parameter int DEPTH_WORDS = 524288   // 2MB
 ) (
     input  var logic        clk,
     input  var logic        rst,
@@ -16,7 +17,9 @@ module instr_mem #(
     output var logic [31:0] instr,
     output var logic        ready
 );
-    logic [31:0] mem [0:524287];
+    localparam int WORDW = $clog2(DEPTH_WORDS);
+
+    logic [31:0] mem [0:DEPTH_WORDS-1];
     string mem_file;
 
     initial begin
@@ -26,7 +29,9 @@ module instr_mem #(
         $readmemh(mem_file, mem);
     end
 
-    assign instr = mem[addr[20:2]];
+    // Only the low bits are decoded; see the matching comment in data_mem.sv
+    // — this aliasing is relied on by the linker script, not a bug.
+    assign instr = mem[addr[WORDW+1:2]];
 
     mem_timing #(.LATENCY(LATENCY)) u_timing (
         .clk(clk), .rst(rst),

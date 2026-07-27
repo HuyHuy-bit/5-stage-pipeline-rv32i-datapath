@@ -31,6 +31,36 @@ package rv32i_pkg;
     localparam logic [3:0] ALU_OP_SRA  = 4'b1001;
     localparam logic [3:0] ALU_OP_PASSB = 4'b1010; // pass operand B through (LUI)
 
+    // ---- pc_src / wb_src mux selectors (control.sv -> cpu.sv) ----
+    // Previously raw 2'b.. literals duplicated in both control.sv and
+    // cpu.sv; same duplication problem the opcode constants above exist to
+    // solve, applied consistently.
+    localparam logic [1:0] PC_SRC_SEQ    = 2'b00; // sequential (pc+4 / predicted)
+    localparam logic [1:0] PC_SRC_BRANCH = 2'b01; // conditional branch
+    localparam logic [1:0] PC_SRC_JALR   = 2'b10;
+    localparam logic [1:0] PC_SRC_JAL    = 2'b11;
+
+    localparam logic [1:0] WB_SRC_ALU  = 2'b00;
+    localparam logic [1:0] WB_SRC_MEM  = 2'b01;
+    localparam logic [1:0] WB_SRC_PC4  = 2'b10; // JAL/JALR link value
+    localparam logic [1:0] WB_SRC_CSR  = 2'b11;
+
+    // ---- Branch-condition funct3 (branch_unit.sv) ----
+    localparam logic [2:0] F3_BEQ  = 3'b000;
+    localparam logic [2:0] F3_BNE  = 3'b001;
+    localparam logic [2:0] F3_BLT  = 3'b100;
+    localparam logic [2:0] F3_BGE  = 3'b101;
+    localparam logic [2:0] F3_BLTU = 3'b110;
+    localparam logic [2:0] F3_BGEU = 3'b111;
+
+    // ---- Load/store width funct3 (lsu.sv); low 2 bits = width, bit 2 =
+    // unsigned for loads ----
+    localparam logic [2:0] F3_LB  = 3'b000;
+    localparam logic [2:0] F3_LH  = 3'b001;
+    localparam logic [2:0] F3_LW  = 3'b010;
+    localparam logic [2:0] F3_LBU = 3'b100;
+    localparam logic [2:0] F3_LHU = 3'b101;
+
     // ---- SYSTEM opcode (CSR instructions, ECALL, EBREAK, MRET) ----
     localparam logic [6:0] OPCODE_SYSTEM = 7'b1110011;
 
