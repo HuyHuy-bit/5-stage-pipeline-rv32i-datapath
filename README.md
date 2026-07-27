@@ -123,6 +123,8 @@ DC_BYTES=4096 DC_WB=1 ./bench/run_bench.sh 10 1024 4 1
 - **Precise exceptions are a control-flow discipline, not a checklist.** Getting `mepc`/`mcause` right is easy; making sure a trap can't corrupt or duplicate architectural state under speculation (a mispredicted branch, an in-flight load) is the actual work.
 - **Passing your own tests and being *correct* are different claims.** The compliance suite exists because directed tests, however careful, reflect the blind spots of whoever wrote them. Running against an external, independently-generated reference is what turns "I believe this works" into "this is verified."
 
+See [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md) for a fuller spec: every major trade-off with its stated cost, the hazard/exception model, and known limitations in one place.
+
 ## Notes
 
 This is a learning project — a real, working pipelined core with genuine hazard/prediction/exception logic and a measured memory hierarchy, verified against the actual RISC-V spec, but not synthesized, not power/timing-aware, and not carrying a randomized/formal verification methodology beyond the directed and compliance test suites described above.
