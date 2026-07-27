@@ -37,8 +37,17 @@ Verilator doesn't support SystemVerilog covergroups; `cover property` is the sup
 **Catches:** silently-untested scenarios — "the directed suite exercises everything that matters" is now a number, not a claim.
 **Doesn't catch:** anything a cover point wasn't written for. The unhit list in `docs/coverage.md` is the actual to-do list: `ecall`/`ebreak` traps, a misaligned-load trap, a genuine predictor target mismatch, and a few D-cache transitions (idle→writeback, writeback→fill, flush→idle) aren't exercised by the 11 directed tests as they stand today — closing those is directed-test work, not infrastructure work.
 
+## Constrained-random regression (`make soak`, `tools/rand_gen.py`)
+
+Spike-based lockstep (the plan's original ask here) is blocked in this sandbox on installing Spike's build dependencies without root — see above. `tools/rv32i_model.py` is the pragmatic substitute: a ~90-line Python interpreter for the subset `tools/rand_gen.py` generates (R-type/I-type ALU ops, word loads/stores against a small aligned scratch region, no branches/jumps/traps/CSRs). `tools/rand_gen.py` emits raw instruction words plus a `.ref` computed by running the same words through the model, so a generated program plugs directly into the existing `+MEMFILE=`/`+REFFILE=` comparison the directed tests already use — no new comparison logic. Generation is biased toward dependency distance 1-2 (60% chance a source register is one of the last two destinations), since that's where forwarding and load-use bugs live.
+
+`make soak SEEDS=1000` (default 100) runs that many programs seed-by-seed; a failing seed prints the seed number and the paths to its program/expected/log for reproduction. 1000 seeds at 80 instructions each pass clean against both the cacheless default build and a cache-enabled one (4-way write-back D$, 4-way I$) in about 20 seconds.
+
+**Catches:** forwarding and load-use bugs in the ALU/load-store subset, independent of the directed suite's own blind spots — the same class of value the compliance suite provides, generalized past a fixed instruction list.
+**Doesn't catch:** anything involving branches, jumps, traps, interrupts, or CSRs (out of the model's scope — those stay covered by the directed suite, compliance suite, and assertions instead). This is real scope, not decoration: don't read "1000/1000 passed" as "the random suite verifies control flow," because it doesn't.
+
 ## Not yet done
 
-- **Instruction-by-instruction lockstep against a golden model** (e.g. Spike) — would catch the "right answer via the wrong path" class of bug that final-state comparison structurally cannot. Largest single verification upgrade available; blocked in this environment on installing Spike's build dependencies (needs root).
-- **Constrained-random testing** against a golden model — would generalize past the blind spots of whoever wrote the directed and even the compliance tests.
+- **Instruction-by-instruction lockstep against a golden model** (e.g. Spike) — would catch the "right answer via the wrong path" class of bug that final-state comparison structurally cannot, and would extend constrained-random coverage to the full ISA including control flow and traps. Largest single verification upgrade available; blocked in this environment on installing Spike's build dependencies (needs root).
 - **Synthesis / static timing** — none of the above says anything about whether the design closes timing; see the README's Notes section.
+- **mstatus / interrupts** — see the README's Notes section; no `mie`/`mip`/timer, so there's nothing here to test yet.

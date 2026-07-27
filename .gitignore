@@ -1,5 +1,6 @@
 obj_dir*/
 coverage/
+__pycache__/
 *.vcd
 tests/*.hex
 compliance/*.elf

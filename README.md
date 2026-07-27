@@ -56,6 +56,7 @@ Three results from the sweeps that are worth more than the headline:
 - `make lint` is clean under `verilator --lint-only -Wall`, with every waiver in [`rtl/verilator.vlt`](rtl/verilator.vlt) carrying a one-line justification.
 - **13 SVA properties** (`rtl/cpu.sv`, `rtl/reg_file.sv`) check control-flow/redirect priority, deadlock/memory, register-file, and forwarding invariants on every cycle of every test — built into every simulator binary via `--assert`, so a violation aborts the run rather than passing silently.
 - **Functional coverage** (`make coverage`, `verilator`'s `cover property`, the supported stand-in for SystemVerilog covergroups on this toolchain): forwarding-path crosses, predictor-outcome crosses, control-flow type, trap causes, and the full D-cache FSM. Currently **25/38 (65.8%)** from the directed suite alone — see [`docs/coverage.md`](docs/coverage.md) for the point-by-point breakdown and what's still unhit.
+- **Constrained-random regression** (`make soak SEEDS=1000`): random ALU/load-store programs checked against a small Python reference model ([`tools/rv32i_model.py`](tools/rv32i_model.py)) — a pragmatic stand-in for Spike, which needs build tooling this sandbox doesn't have root to install. 1000 seeds pass clean against both the cacheless and cache-enabled builds.
 
 See [`docs/VERIFICATION_PLAN.md`](docs/VERIFICATION_PLAN.md) for what's tested, by what mechanism, and what's explicitly not tested yet.
 
