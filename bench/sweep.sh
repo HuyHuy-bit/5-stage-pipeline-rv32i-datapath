@@ -52,7 +52,9 @@ for cfg in "${CONFIGS[@]}"; do
     for k in "${KERNELS[@]}"; do
         line=$(awk -v k="$k" '$1==k' <<< "$out")
         cpi=$(awk '{print $4}' <<< "$line")
-        hr=$(awk '{print $NF}' <<< "$line")
+        # Column 7 is the I-cache hit rate; $NF is the D-cache column, which is
+        # a bare "-" in this sweep and used to be where the I-cache rate sat.
+        hr=$(awk '{print $7}' <<< "$line")
         row+=$(printf '%18s' "$(printf '%.2f / %s' "$cpi" "$hr")")
     done
     echo "$row"
