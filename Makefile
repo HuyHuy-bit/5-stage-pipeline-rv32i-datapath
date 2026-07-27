@@ -6,7 +6,8 @@ CPU_SRCS = rtl/rv32i_pkg.sv \
            rtl/cpu.sv rtl/pc.sv rtl/instr_mem.sv rtl/reg_file.sv rtl/imm_gen.sv \
            rtl/alu.sv rtl/control.sv rtl/data_mem.sv rtl/branch_unit.sv \
            rtl/if_id_reg.sv rtl/id_ex_reg.sv rtl/ex_mem_reg.sv rtl/mem_wb_reg.sv \
-           rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/csr.sv
+           rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/csr.sv \
+           rtl/mem_timing.sv
 
 VFLAGS   = --cc --exe --build --trace -j 0
 OBJDIR   = obj_dir
@@ -16,7 +17,7 @@ ASM      = python3 tools/asm.py
 TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
-.PHONY: all sim assemble test bench lint wave clean
+.PHONY: all sim assemble test memtiming bench lint wave clean
 
 # Default: build, assemble, run the full suite.
 all: sim assemble test
@@ -31,8 +32,16 @@ assemble: $(HEXFILES)
 tests/%.hex: tests/%.s tools/asm.py
 	$(ASM) $< $@
 
+# Unit-check the memory access-cost model. Every CPI number the project
+# reports is scaled by this, and an off-by-one here would bias results
+# silently rather than failing anything.
+memtiming:
+	@verilator --cc --exe --build -j 0 --top-module mem_timing -GLATENCY=10 \
+	    --Mdir obj_dir_memtiming rtl/mem_timing.sv tb/mem_timing_tb.cpp > /dev/null
+	@./obj_dir_memtiming/Vmem_timing
+
 # Run every test and print a summary.
-test: sim assemble
+test: sim assemble memtiming
 	@echo "========== RV32I test suite =========="
 	@PASS=0; FAIL=0; \
 	for t in $(TESTS); do \
@@ -67,4 +76,4 @@ wave: sim assemble
 	gtkwave tests/$(TEST).vcd &
 
 clean:
-	rm -rf $(OBJDIR) tests/*.hex tests/*.vcd cpu.vcd
+	rm -rf $(OBJDIR) obj_dir_L* obj_dir_memtiming tests/*.hex tests/*.vcd cpu.vcd

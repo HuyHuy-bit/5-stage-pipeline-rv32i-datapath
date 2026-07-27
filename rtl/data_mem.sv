@@ -11,6 +11,7 @@ module data_mem #(
     input  logic        mem_write,    // 1 when storing
     input  logic        mem_read,     // 1 when loading
     input  logic        req,          // this cycle genuinely presents an access
+    input  logic        burst,        // requester is walking sequential words
     input  logic [2:0]  funct3,       // access size + signedness (from instruction)
     input  logic [31:0] addr,         // byte address (ALU result)
     input  logic [31:0] write_data,   // value to store (rs2)
@@ -39,36 +40,10 @@ module data_mem #(
     assign word_idx = addr[15:2];   // which 32-bit word
     assign byte_off = addr[1:0];    // which byte within the word
 
-    // Access timing. ponytail: as in instr_mem, re-presenting the same address
-    // is free, so a store immediately followed by a load of that same word hits
-    // for nothing - which is what a write-back cache would do anyway.
-    if (LATENCY <= 1) begin : g_fast
-        assign ready = 1'b1;
-    end else begin : g_slow
-        localparam int CW = $clog2(LATENCY + 1);
-
-        logic [CW-1:0] cnt;
-        logic [31:0]   served_addr;
-        logic          served;
-
-        assign ready = !req || (served && (served_addr == addr));
-
-        always_ff @(posedge clk) begin
-            if (rst) begin
-                served      <= 1'b0;
-                served_addr <= 32'd0;
-                cnt         <= CW'(LATENCY - 1);
-            end else if (!ready) begin
-                if (cnt <= CW'(1)) begin
-                    served      <= 1'b1;
-                    served_addr <= addr;
-                    cnt         <= CW'(LATENCY - 1);
-                end else begin
-                    cnt <= cnt - CW'(1);
-                end
-            end
-        end
-    end
+    mem_timing #(.LATENCY(LATENCY)) u_timing (
+        .clk(clk), .rst(rst),
+        .req(req), .burst(burst), .addr(addr), .ready(ready)
+    );
 
     // STORE: byte-enable generation
     // byte_en[i] = 1 means lane i (bits [8i+7 : 8i]) gets written this cycle.

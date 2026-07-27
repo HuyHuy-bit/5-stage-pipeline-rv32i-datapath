@@ -36,6 +36,7 @@ module cpu #(
 
     instr_mem #(.LATENCY(IMEM_LATENCY)) u_instr_mem (
         .clk(clk), .rst(rst),
+        .req(1'b1), .burst(1'b0),   // bare fetch: every access is independent
         .addr(pc_out), .instr(instr_if), .ready(imem_ready)
     );
 
@@ -406,7 +407,7 @@ module cpu #(
     data_mem #(.LATENCY(DMEM_LATENCY)) u_data_mem (
         .clk(clk), .rst(rst),
         .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
-        .req(dmem_req),
+        .req(dmem_req), .burst(1'b0),
         .funct3(funct3_mem),
         .addr(alu_result_mem), .write_data(rs2_data_mem),
         .read_data(mem_read_data_mem), .ready(dmem_ready)
