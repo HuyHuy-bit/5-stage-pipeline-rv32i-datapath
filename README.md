@@ -17,7 +17,7 @@ Every cycle, up to five instructions are in flight at once, moving through **IF 
 ## Verification
 
 - **11 hand-written directed tests** covering every instruction class, plus specific hazard, prediction, and exception-round-trip scenarios (each one written to catch a specific failure mode, not just exercise the happy path).
-- **The official RISC-V `riscv-arch-test` compliance suite** (`rv32i_m/I`, base integer): **37/38 passing**, each result diffed word-for-word against the golden reference signature.
+- **The official RISC-V `riscv-arch-test` compliance suite** (`rv32i_m/I`, base integer): **38/38 passing**, each result diffed word-for-word against the golden reference signature.
 - CI runs the full directed-test suite on every push, and the compliance sweep whenever the RTL changes.
 
 ## Architecture

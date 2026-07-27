@@ -18,7 +18,15 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y gcc-riscv64-unknown-elf verilator
 
+      - name: Cache riscv-arch-test
+        id: arch-test-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/riscv-arch-test
+          key: riscv-arch-test-old-framework-2.x
+
       - name: Clone riscv-arch-test
+        if: steps.arch-test-cache.outputs.cache-hit != 'true'
         run: |
           git clone --branch old-framework-2.x --depth 1 \
             https://github.com/riscv-non-isa/riscv-arch-test.git ~/riscv-arch-test

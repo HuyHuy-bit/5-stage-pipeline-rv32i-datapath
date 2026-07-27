@@ -9,8 +9,32 @@ CPU_SRCS = rtl/rv32i_pkg.sv \
            rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/csr.sv \
            rtl/mem_timing.sv rtl/icache.sv rtl/lsu.sv rtl/dcache.sv
 
+# Cache/latency configuration. Defaults match the plain no-cache build so
+# `make all` with no arguments behaves exactly as before.
+IC_BYTES ?= 0
+IC_BLOCK ?= 4
+IC_WAYS  ?= 1
+DC_BYTES ?= 0
+DC_BLOCK ?= 4
+DC_WAYS  ?= 1
+DC_WB    ?= 0
+IMEM_LAT ?= 1
+DMEM_LAT ?= 1
+
+GPARAMS  = -GIMEM_LATENCY=$(IMEM_LAT) -GDMEM_LATENCY=$(DMEM_LAT) \
+           -GICACHE_BYTES=$(IC_BYTES) -GICACHE_BLOCK_WORDS=$(IC_BLOCK) -GICACHE_WAYS=$(IC_WAYS) \
+           -GDCACHE_BYTES=$(DC_BYTES) -GDCACHE_BLOCK_WORDS=$(DC_BLOCK) -GDCACHE_WAYS=$(DC_WAYS) \
+           -GDCACHE_WRITE_BACK=$(DC_WB)
+
 VFLAGS   = --cc --exe --build --trace -j 0
+# The all-defaults config keeps the plain "obj_dir" name other scripts (e.g.
+# bench/run_bench.sh) already expect; any non-default config gets its own dir
+# so configs don't clobber each other's cached build.
+ifeq ($(IC_BYTES)$(IC_BLOCK)$(IC_WAYS)$(DC_BYTES)$(DC_BLOCK)$(DC_WAYS)$(DC_WB)$(IMEM_LAT)$(DMEM_LAT),041041011)
 OBJDIR   = obj_dir
+else
+OBJDIR   = obj_dir_ic$(IC_BYTES)_$(IC_BLOCK)_$(IC_WAYS)_dc$(DC_BYTES)_$(DC_BLOCK)_$(DC_WAYS)_$(DC_WB)_L$(IMEM_LAT)_$(DMEM_LAT)
+endif
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
 
@@ -25,7 +49,7 @@ all: sim assemble test
 # Build the simulator binary.
 sim: $(SIM)
 $(SIM): $(CPU_SRCS) $(TB)
-	verilator $(VFLAGS) --top-module $(TOP) $(CPU_SRCS) $(TB)
+	verilator $(VFLAGS) $(GPARAMS) --Mdir $(OBJDIR) --top-module $(TOP) $(CPU_SRCS) $(TB)
 
 # Assemble every test program that is out of date.
 assemble: $(HEXFILES)
@@ -63,9 +87,9 @@ test: sim assemble memtiming
 bench: sim
 	@./bench/run_bench.sh
 
-# Lint only — quick syntax/structure check.
+# Lint only — quick syntax/structure check, -Wall with a documented waiver file.
 lint:
-	verilator --lint-only --top-module $(TOP) $(CPU_SRCS)
+	verilator --lint-only -Wall --top-module $(TOP) rtl/verilator.vlt $(CPU_SRCS)
 
 # Open a specific test waveform: make wave TEST=t04_branch
 TEST ?= t01_rtype
@@ -76,4 +100,4 @@ wave: sim assemble
 	gtkwave tests/$(TEST).vcd &
 
 clean:
-	rm -rf $(OBJDIR) obj_dir_L* obj_dir_memtiming tests/*.hex tests/*.vcd cpu.vcd
+	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming tests/*.hex tests/*.vcd cpu.vcd
