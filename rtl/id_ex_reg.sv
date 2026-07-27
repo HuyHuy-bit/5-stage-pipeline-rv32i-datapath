@@ -5,6 +5,7 @@ module id_ex_reg (
     input  logic        clk,
     input  logic        rst,
     input  logic         flush,     // bubble insert (control hazard from EX, or Step-3 hazard unit)
+    input  logic         freeze,    // hold contents, outranking flush (memory stall)
 
     // datapath values coming out of ID
     input  logic [31:0] pc_in,
@@ -68,7 +69,9 @@ module id_ex_reg (
     output logic [31:0] instr_out
 );
     always_ff @(posedge clk) begin
-        if (rst || flush) begin
+        if (freeze && !rst) begin
+            // hold - a memory stall freezes the whole pipe
+        end else if (rst || flush) begin
             pc_out           <= 32'd0;
             pc_plus4_out     <= 32'd0;
             rs1_data_out     <= 32'd0;

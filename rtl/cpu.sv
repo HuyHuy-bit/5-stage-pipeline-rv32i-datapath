@@ -1,7 +1,10 @@
 `default_nettype none
 
 // cpu.sv - top-level module: 5-stage pipelined RV32I CPU.
-module cpu (
+module cpu #(
+    parameter int IMEM_LATENCY = 1,
+    parameter int DMEM_LATENCY = 1
+) (
     input  logic clk,
     input  logic rst,
     output logic [31:0] perf_cycle_count,
@@ -9,7 +12,8 @@ module cpu (
     output logic [31:0] perf_stall_count,
     output logic [31:0] perf_flush_count,
     output logic [31:0] perf_mispredict_count,
-    output logic [31:0] perf_branch_count
+    output logic [31:0] perf_branch_count,
+    output logic [31:0] perf_mem_stall_count
 );
 
     // IF stage
@@ -18,7 +22,22 @@ module cpu (
     pc u_pc ( .clk(clk), .rst(rst), .next_pc(next_pc), .pc_out(pc_out) );
     assign pc_plus4_if = pc_out + 32'd4;
 
-    instr_mem u_instr_mem ( .addr(pc_out), .instr(instr_if) );
+    // Memory stall. Either memory being busy freezes the entire pipeline for
+    // the cycle - PC, every pipeline register, the predictor, the CSR file and
+    // the counters all hold, so the machine resumes exactly where it left off.
+    //
+    // ponytail: one global freeze, rather than letting the back end drain
+    // through an instruction-fetch miss. That costs some overlap the real
+    // thing would recover, and it inflates baseline and post-cache numbers
+    // alike. Decoupling the front end needs a fetch buffer - worth it only if
+    // the I-cache miss rate stays high enough to care.
+    logic imem_ready, dmem_ready, pipe_stall;
+    assign pipe_stall = !imem_ready || !dmem_ready;
+
+    instr_mem #(.LATENCY(IMEM_LATENCY)) u_instr_mem (
+        .clk(clk), .rst(rst),
+        .addr(pc_out), .instr(instr_if), .ready(imem_ready)
+    );
 
     // Front-end branch prediction: index BHT+BTB with the fetch PC. On a
     // predicted-taken hit we redirect the very next fetch to the cached
@@ -52,9 +71,11 @@ module cpu (
     logic        trap_redirect;
     logic [31:0] trap_target;
 
-    // Next-PC priority: trap/MRET (commit point) > EX misprediction recovery >
-    // load-use stall (hold) > front-end predicted-taken redirect > sequential.
-    assign next_pc = trap_redirect     ? trap_target
+    // Next-PC priority: memory stall (freeze) > trap/MRET (commit point) >
+    // EX misprediction recovery > load-use stall (hold) > front-end
+    // predicted-taken redirect > sequential.
+    assign next_pc = pipe_stall        ? pc_out               // freeze: re-present same fetch
+                    : trap_redirect     ? trap_target
                     : ex_flush          ? ex_resolved_target
                     : load_use_stall   ? pc_out               // hold: re-fetch same address
                     : predict_taken_if ? predict_target_if    // speculative taken redirect
@@ -70,6 +91,7 @@ module cpu (
         .clk(clk), .rst(rst),
         .flush(ex_flush || trap_redirect),
         .stall(load_use_stall),
+        .freeze(pipe_stall),
         .pc_in(pc_out), .pc_plus4_in(pc_plus4_if), .instr_in(instr_if),
         .predicted_taken_in(predict_taken_if), .predicted_target_in(predict_target_if),
         .pc_out(pc_id), .pc_plus4_out(pc_plus4_id), .instr_out(instr_id),
@@ -147,7 +169,7 @@ module cpu (
     assign id_ex_flush = ex_flush || load_use_stall || trap_redirect;
 
     id_ex_reg u_id_ex (
-        .clk(clk), .rst(rst), .flush(id_ex_flush),
+        .clk(clk), .rst(rst), .flush(id_ex_flush), .freeze(pipe_stall),
         .pc_in(pc_id), .pc_plus4_in(pc_plus4_id),
         .rs1_data_in(reg_rs1_data_id), .rs2_data_in(reg_rs2_data_id), .imm_in(imm_id),
         .rs1_addr_in(rs1_addr_id), .rs2_addr_in(rs2_addr_id), .rd_addr_in(rd_addr_id),
@@ -290,7 +312,10 @@ module cpu (
     assign ex_resolved_target = false_predict ? (pc_ex + 32'd4) : correct_next_pc;
 
     // Predictor learning: update on every resolved control-flow instruction.
-    assign bp_update_en     = valid_ex && is_cf_instr;
+    // Not while frozen - ID/EX holds, so the same branch would be presented
+    // for as many cycles as the stall lasts and its saturating counter would
+    // be driven to the rail by a single resolution.
+    assign bp_update_en     = valid_ex && is_cf_instr && !pipe_stall;
     assign bp_update_pc     = pc_ex;
     assign bp_update_taken  = actual_taken;
     assign bp_update_target = actual_target;
@@ -347,6 +372,7 @@ module cpu (
     ex_mem_reg u_ex_mem (
         .clk(clk), .rst(rst),
         .flush(trap_redirect),
+        .freeze(pipe_stall),
         .alu_result_in(alu_result_ex), .rs2_data_in(rs2_data_ex_fwd), .pc_plus4_in(pc_plus4_ex),
         .rd_addr_in(rd_addr_ex), .funct3_in(funct3_ex),
         .reg_write_en_in(reg_write_en_ex), .mem_write_in(mem_write_ex), .mem_read_in(mem_read_ex),
@@ -370,12 +396,20 @@ module cpu (
     logic mem_write_mem_gated;
     assign mem_write_mem_gated = mem_write_mem && !(valid_mem && exc_pending_mem);
 
+    // A faulting access must NOT be presented to memory. If it were, the pipe
+    // would freeze waiting for an access to complete while the trap that would
+    // release it can only commit once the pipe is unfrozen - a deadlock.
+    logic dmem_req;
+    assign dmem_req = valid_mem && (mem_read_mem || mem_write_mem) && !exc_pending_mem;
+
     logic [31:0] mem_read_data_mem;
-    data_mem u_data_mem (
-        .clk(clk), .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
+    data_mem #(.LATENCY(DMEM_LATENCY)) u_data_mem (
+        .clk(clk), .rst(rst),
+        .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
+        .req(dmem_req),
         .funct3(funct3_mem),
         .addr(alu_result_mem), .write_data(rs2_data_mem),
-        .read_data(mem_read_data_mem)
+        .read_data(mem_read_data_mem), .ready(dmem_ready)
     );
 
     // ---- Commit point: traps, MRET, and CSR writes all resolve here ----
@@ -400,7 +434,12 @@ module cpu (
         mret_take    = 1'b0;
         csr_commit   = 1'b0;
 
-        if (valid_mem) begin
+        // !pipe_stall: an instruction sitting in MEM across a memory stall is
+        // presented to this block every one of those cycles. Committing only on
+        // the cycle the pipeline actually advances keeps trap/MRET/CSR strictly
+        // once-per-instruction, and keeps the trap redirect from fighting the
+        // frozen PC.
+        if (valid_mem && !pipe_stall) begin
             if (exc_pending_mem) begin
                 trap_take    = 1'b1;               // illegal instruction (Part 1)
                 trap_cause_w = exc_cause_mem;
@@ -458,7 +497,7 @@ module cpu (
     assign reg_write_en_mem_gated = reg_write_en_mem && !(trap_take);
 
     mem_wb_reg u_mem_wb (
-        .clk(clk), .rst(rst),
+        .clk(clk), .rst(rst), .freeze(pipe_stall),
         .mem_read_data_in(mem_read_data_mem), .alu_result_in(mem_result_for_wb), .pc_plus4_in(pc_plus4_mem),
         .rd_addr_in(rd_addr_mem),
         .reg_write_en_in(reg_write_en_mem_gated), .wb_src_in(wb_src_mem), .valid_in(valid_mem),
@@ -482,6 +521,22 @@ module cpu (
     // not on bubbles - a flushed/stalled slot reaching WB looks identical to
     // a legitimately non-writing instruction (store, branch) unless the
     // valid bit threaded through every pipeline register distinguishes them.
+    //
+    // Everything except the cycle count is gated on !pipe_stall. A frozen
+    // pipeline re-presents the same instruction to every stage each cycle, so
+    // an ungated counter would multiply one event by the length of the stall.
+    // Cycles are the exception: those really did elapse, and a stall that
+    // didn't show up in the cycle count would defeat the whole point.
+    //
+    // flush and mispredict are separate events, not the same one counted
+    // twice: a flush is any pipeline squash (mispredict OR trap redirect),
+    // while a mispredict is specifically a control-flow instruction the
+    // predictor got wrong. Predicting a non-branch as taken off a stale BTB
+    // alias is a flush but not a branch mispredict, and folding it into the
+    // accuracy figure would understate the predictor.
+    logic real_mispredict;
+    assign real_mispredict = valid_ex && is_cf_instr && mispredict;
+
     always_ff @(posedge clk) begin
         if (rst) begin
             perf_cycle_count      <= 32'd0;
@@ -490,13 +545,17 @@ module cpu (
             perf_flush_count      <= 32'd0;
             perf_mispredict_count <= 32'd0;
             perf_branch_count     <= 32'd0;
+            perf_mem_stall_count  <= 32'd0;
         end else begin
             perf_cycle_count      <= perf_cycle_count + 32'd1;
-            perf_instr_retired    <= perf_instr_retired + (valid_wb ? 32'd1 : 32'd0);
-            perf_stall_count      <= perf_stall_count   + (load_use_stall ? 32'd1 : 32'd0);
-            perf_flush_count      <= perf_flush_count   + (ex_flush ? 32'd1 : 32'd0);
-            perf_mispredict_count <= perf_mispredict_count + ((ex_flush) ? 32'd1 : 32'd0);
-            perf_branch_count     <= perf_branch_count     + (bp_update_en ? 32'd1 : 32'd0);
+            perf_mem_stall_count  <= perf_mem_stall_count + (pipe_stall ? 32'd1 : 32'd0);
+            if (!pipe_stall) begin
+                perf_instr_retired    <= perf_instr_retired + (valid_wb ? 32'd1 : 32'd0);
+                perf_stall_count      <= perf_stall_count   + (load_use_stall ? 32'd1 : 32'd0);
+                perf_flush_count      <= perf_flush_count   + ((ex_flush || trap_redirect) ? 32'd1 : 32'd0);
+                perf_mispredict_count <= perf_mispredict_count + (real_mispredict ? 32'd1 : 32'd0);
+                perf_branch_count     <= perf_branch_count     + (bp_update_en ? 32'd1 : 32'd0);
+            end
         end
     end
 

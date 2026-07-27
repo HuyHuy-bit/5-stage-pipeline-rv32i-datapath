@@ -6,6 +6,7 @@ module if_id_reg (
     input  var logic        rst,
     input  var logic        flush,      // squash on taken branch/jump (control hazard)
     input  var logic        stall,      // hold contents (load-use hazard - added Step 3)
+    input  var logic        freeze,     // hold contents, outranking flush (memory stall)
     input  var logic [31:0] pc_in,
     input  var logic [31:0] pc_plus4_in,
     input  var logic [31:0] instr_in,
@@ -19,8 +20,15 @@ module if_id_reg (
     output var logic        predicted_taken_out,
     output var logic [31:0] predicted_target_out
 );
+    // Priority: rst > freeze > flush > stall. freeze has to outrank flush,
+    // unlike stall: a load-use stall coinciding with a mispredict must let the
+    // flush win (the held instruction is wrong-path), but a memory stall means
+    // the clock may as well not have ticked - every register holds, and the
+    // flush is still there to act on once the memory answers.
     always_ff @(posedge clk) begin
-        if (rst || flush) begin
+        if (freeze && !rst) begin
+            // hold
+        end else if (rst || flush) begin
             pc_out               <= 32'd0;
             pc_plus4_out         <= 32'd0;
             instr_out            <= 32'd0;      // all-zero = illegal opcode -> control.sv default -> NOP-like (no writes)

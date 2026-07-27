@@ -5,6 +5,7 @@ module ex_mem_reg (
     input  logic        clk,
     input  logic        rst,
     input  logic        flush,   // squash the instruction in EX (e.g. trap in MEM)
+    input  logic        freeze,  // hold contents, outranking flush (memory stall)
 
     input  logic [31:0] alu_result_in,
     input  logic [31:0] rs2_data_in,     // store data (passes through EX unchanged)
@@ -51,7 +52,9 @@ module ex_mem_reg (
     output logic [31:0] instr_out
 );
     always_ff @(posedge clk) begin
-        if (rst || flush) begin
+        if (freeze && !rst) begin
+            // hold - a memory stall freezes the whole pipe
+        end else if (rst || flush) begin
             alu_result_out   <= 32'd0;
             rs2_data_out     <= 32'd0;
             pc_plus4_out     <= 32'd0;

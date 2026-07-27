@@ -1,13 +1,21 @@
 `default_nettype none
 
-module data_mem (
+// LATENCY models a slow backing store; see instr_mem.sv for the model. Only
+// cycles where `req` is asserted cost anything, so non-memory instructions
+// flow through the MEM stage untouched.
+module data_mem #(
+    parameter int LATENCY = 1
+) (
     input  logic        clk,          // clock
+    input  logic        rst,
     input  logic        mem_write,    // 1 when storing
     input  logic        mem_read,     // 1 when loading
+    input  logic        req,          // this cycle genuinely presents an access
     input  logic [2:0]  funct3,       // access size + signedness (from instruction)
     input  logic [31:0] addr,         // byte address (ALU result)
     input  logic [31:0] write_data,   // value to store (rs2)
-    output logic [31:0] read_data     // value loaded (already extended)
+    output logic [31:0] read_data,    // value loaded (already extended)
+    output logic        ready         // 0 => access still in flight, freeze the pipe
 );
     // Word-addressed array; subword access handled via per-byte write strobes.
     logic [31:0] mem_array [0:16383];
@@ -31,12 +39,45 @@ module data_mem (
     assign word_idx = addr[15:2];   // which 32-bit word
     assign byte_off = addr[1:0];    // which byte within the word
 
+    // Access timing. ponytail: as in instr_mem, re-presenting the same address
+    // is free, so a store immediately followed by a load of that same word hits
+    // for nothing - which is what a write-back cache would do anyway.
+    if (LATENCY <= 1) begin : g_fast
+        assign ready = 1'b1;
+    end else begin : g_slow
+        localparam int CW = $clog2(LATENCY + 1);
+
+        logic [CW-1:0] cnt;
+        logic [31:0]   served_addr;
+        logic          served;
+
+        assign ready = !req || (served && (served_addr == addr));
+
+        always_ff @(posedge clk) begin
+            if (rst) begin
+                served      <= 1'b0;
+                served_addr <= 32'd0;
+                cnt         <= CW'(LATENCY - 1);
+            end else if (!ready) begin
+                if (cnt <= CW'(1)) begin
+                    served      <= 1'b1;
+                    served_addr <= addr;
+                    cnt         <= CW'(LATENCY - 1);
+                end else begin
+                    cnt <= cnt - CW'(1);
+                end
+            end
+        end
+    end
+
     // STORE: byte-enable generation
     // byte_en[i] = 1 means lane i (bits [8i+7 : 8i]) gets written this cycle.
     logic [3:0] byte_en;
     always_comb begin
         byte_en = 4'b0000;
-        if (mem_write) begin
+        // A store commits only on the cycle its access completes, not on every
+        // cycle it sits in MEM waiting for the memory to answer.
+        if (mem_write && ready) begin
             case (funct3)
                 F3_B:    byte_en = 4'b0001 << byte_off;        // sb: one lane
                 F3_H:    byte_en = 4'b0011 << byte_off;        // sh: two lanes (off = 0 or 2)

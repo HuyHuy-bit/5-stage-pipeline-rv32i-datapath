@@ -4,6 +4,7 @@
 module mem_wb_reg (
     input  logic        clk,
     input  logic        rst,
+    input  logic        freeze,  // hold contents (memory stall)
 
     input  logic [31:0] mem_read_data_in,
     input  logic [31:0] alu_result_in,
@@ -32,7 +33,7 @@ module mem_wb_reg (
             reg_write_en_out  <= 1'b0;
             wb_src_out        <= 2'b00;
             valid_out         <= 1'b0;
-        end else begin
+        end else if (!freeze) begin
             mem_read_data_out <= mem_read_data_in;
             alu_result_out    <= alu_result_in;
             pc_plus4_out      <= pc_plus4_in;
