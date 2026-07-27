@@ -1,5 +1,4 @@
-obj_dir/
-obj_dir_L*/
+obj_dir*/
 *.vcd
 tests/*.hex
 compliance/*.elf
