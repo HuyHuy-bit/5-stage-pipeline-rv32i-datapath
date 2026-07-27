@@ -20,44 +20,59 @@ ELF2HEX="$ROOT/compliance/elf2hex.py"
 WORK="${TMPDIR:-/tmp}/rv32i_bench"
 CYCLES=600000         # testbench timeout multiplier, not a cycle budget
 
-LATENCY="${1:-1}"
-IC_BYTES="${2:-0}"
-IC_BLOCK="${3:-4}"
-IC_WAYS="${4:-1}"
+# Positional args cover latency and the I-cache; the D-cache is configured
+# through the environment, because eight positional parameters is nobody's idea
+# of an interface.
+LATENCY="${LATENCY:-${1:-1}}"
+IC_BYTES="${IC_BYTES:-${2:-0}}"
+IC_BLOCK="${IC_BLOCK:-${3:-4}}"
+IC_WAYS="${IC_WAYS:-${4:-1}}"
+DC_BYTES="${DC_BYTES:-0}"
+DC_BLOCK="${DC_BLOCK:-4}"
+DC_WAYS="${DC_WAYS:-1}"
+DC_WB="${DC_WB:-0}"
 
 KERNELS=(crc32 matmul sort llist interp)
 mkdir -p "$WORK"
 
-if [ "$LATENCY" -le 1 ] && [ "$IC_BYTES" -eq 0 ]; then
+if [ "$LATENCY" -le 1 ] && [ "$IC_BYTES" -eq 0 ] && [ "$DC_BYTES" -eq 0 ]; then
     SIM="$ROOT/obj_dir/Vcpu"          # the plain build the Makefile already makes
     if [ ! -x "$SIM" ]; then
         echo "error: $SIM not built - run 'make sim' first" >&2
         exit 1
     fi
 else
-    OBJ="$ROOT/obj_dir_L${LATENCY}_ic${IC_BYTES}_b${IC_BLOCK}_w${IC_WAYS}"
+    OBJ="$ROOT/obj_dir_L${LATENCY}_ic${IC_BYTES}_${IC_BLOCK}_${IC_WAYS}_dc${DC_BYTES}_${DC_BLOCK}_${DC_WAYS}_${DC_WB}"
     SIM="$OBJ/Vcpu"
-    if [ ! -x "$SIM" ]; then
-        echo "building simulator: latency=$LATENCY icache=${IC_BYTES}B/${IC_BLOCK}w/${IC_WAYS}way ..." >&2
+    # Builds are cached per configuration, so an RTL edit that doesn't change
+    # the configuration would otherwise be measured with a stale binary and
+    # report the old numbers as if they were new ones.
+    newest=$(ls -t "$ROOT"/rtl/*.sv "$ROOT/cpu_tb.cpp" | head -1)
+    if [ ! -x "$SIM" ] || [ "$newest" -nt "$SIM" ]; then
+        echo "building simulator: latency=$LATENCY ic=${IC_BYTES}B dc=${DC_BYTES}B ..." >&2
         verilator --cc --exe --build --trace -j 0 --top-module cpu \
             -GIMEM_LATENCY="$LATENCY" -GDMEM_LATENCY="$LATENCY" \
             -GICACHE_BYTES="$IC_BYTES" -GICACHE_BLOCK_WORDS="$IC_BLOCK" \
             -GICACHE_WAYS="$IC_WAYS" \
+            -GDCACHE_BYTES="$DC_BYTES" -GDCACHE_BLOCK_WORDS="$DC_BLOCK" \
+            -GDCACHE_WAYS="$DC_WAYS" -GDCACHE_WRITE_BACK="$DC_WB" \
             --Mdir "$OBJ" \
             "$ROOT"/rtl/rv32i_pkg.sv $(ls "$ROOT"/rtl/*.sv | grep -v rv32i_pkg.sv) "$ROOT/cpu_tb.cpp" \
             > "$WORK/build.log" 2>&1 || { cat "$WORK/build.log" >&2; exit 1; }
     fi
 fi
 
-if [ "$IC_BYTES" -eq 0 ]; then
-    echo "memory latency: $LATENCY cycle(s), I-cache: none"
-else
-    echo "memory latency: $LATENCY cycle(s), I-cache: ${IC_BYTES}B ${IC_BLOCK}-word blocks ${IC_WAYS}-way"
+icdesc="none"; [ "$IC_BYTES" -ne 0 ] && icdesc="${IC_BYTES}B ${IC_BLOCK}w ${IC_WAYS}-way"
+dcdesc="none"
+if [ "$DC_BYTES" -ne 0 ]; then
+    [ "$DC_WB" -ne 0 ] && pol="write-back" || pol="write-through"
+    dcdesc="${DC_BYTES}B ${DC_BLOCK}w ${DC_WAYS}-way $pol"
 fi
+echo "memory latency: $LATENCY cycle(s) | I-cache: $icdesc | D-cache: $dcdesc"
 
-printf '%-10s %10s %10s %7s %8s %10s %9s %9s\n' \
-       kernel cycles instret CPI flushes memstall bpred-acc ic-hitrate
-printf '%.0s-' {1..80}; echo
+printf '%-10s %10s %10s %7s %10s %9s %10s %10s\n' \
+       kernel cycles instret CPI memstall bpred-acc ic-hitrate dc-hitrate
+printf '%.0s-' {1..82}; echo
 
 FAIL=0
 for k in "${KERNELS[@]}"; do
@@ -99,7 +114,8 @@ for k in "${KERNELS[@]}"; do
 
     perf=$(grep -m1 'perf: cycles=' "$WORK/$k.run.log")
     bp=$(grep -m1 'bpred: branches=' "$WORK/$k.run.log")
-    ic=$(grep -m1 'icache: hits=' "$WORK/$k.run.log")
+    ic=$(grep -m1 'icache: accesses=' "$WORK/$k.run.log")
+    dc=$(grep -m1 'dcache: accesses=' "$WORK/$k.run.log")
     get() { sed -n "s/.*$1=\([0-9.]*\).*/\1/p" <<< "$2"; }
 
     if [ -z "$perf" ]; then
@@ -108,10 +124,10 @@ for k in "${KERNELS[@]}"; do
     fi
 
     if [ "$IC_BYTES" -eq 0 ]; then ichr="-"; else ichr="$(get hitrate "$ic")%"; fi
-    printf '%-10s %10s %10s %7s %8s %10s %8s%% %9s' \
+    if [ "$DC_BYTES" -eq 0 ]; then dchr="-"; else dchr="$(get hitrate "$dc")%"; fi
+    printf '%-10s %10s %10s %7s %10s %8s%% %10s %10s' \
         "$k" "$(get cycles "$perf")" "$(get instret "$perf")" "$(get CPI "$perf")" \
-        "$(get flushes "$perf")" "$(get memstall "$perf")" \
-        "$(get accuracy "$bp")" "$ichr"
+        "$(get memstall "$perf")" "$(get accuracy "$bp")" "$ichr" "$dchr"
 
     if [ $rc -ne 0 ]; then
         got=$(sed -n 's/.*x10  got=0x\([0-9a-f]*\).*/\1/p' "$WORK/$k.run.log")

@@ -35,8 +35,9 @@ module icache #(
     input  var logic [31:0] mem_instr,
     input  var logic        mem_ready,
 
-    // counters (hit is a level, gate it on pipeline advance; miss is a pulse)
-    output var logic        hit,
+    // Counters are misses only; the CPU counts accesses as advancing cycles.
+    // A hit level would be true again the moment a refill lands, so counting it
+    // on pipeline advance would score every miss as a hit too.
     output var logic        miss_pulse
 );
     localparam int SETS  = BYTES / (BLOCK_WORDS * 4 * WAYS);
@@ -92,6 +93,7 @@ module icache #(
     logic [OFFW-1:0] fill_word;
     logic [WAYW-1:0] fill_way;
 
+    logic hit;
     assign hit   = |way_hit;
     assign ready = hit;
     assign instr = data[hit_way][idx][off];

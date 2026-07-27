@@ -9,7 +9,11 @@ module cpu #(
     // the cache existed rather than being a degenerate cache configuration.
     parameter int ICACHE_BYTES       = 0,
     parameter int ICACHE_BLOCK_WORDS = 4,
-    parameter int ICACHE_WAYS        = 1
+    parameter int ICACHE_WAYS        = 1,
+    parameter int DCACHE_BYTES       = 0,
+    parameter int DCACHE_BLOCK_WORDS = 4,
+    parameter int DCACHE_WAYS        = 1,
+    parameter int DCACHE_WRITE_BACK  = 0
 ) (
     input  logic clk,
     input  logic rst,
@@ -20,8 +24,15 @@ module cpu #(
     output logic [31:0] perf_mispredict_count,
     output logic [31:0] perf_branch_count,
     output logic [31:0] perf_mem_stall_count,
-    output logic [31:0] perf_icache_hit,
-    output logic [31:0] perf_icache_miss
+    output logic [31:0] perf_icache_access,
+    output logic [31:0] perf_icache_miss,
+    output logic [31:0] perf_dcache_access,
+    output logic [31:0] perf_dcache_miss,
+    // Debug: drive high to write every dirty D-cache line back to memory, and
+    // wait for dbg_flush_done. Only meaningful for a write-back D-cache, where
+    // memory on its own no longer holds all of architectural state.
+    input  logic        dbg_flush,
+    output logic        dbg_flush_done
 );
 
     // IF stage
@@ -45,7 +56,7 @@ module cpu #(
     // Fetch path: optionally through the I-cache, otherwise straight to memory.
     logic [31:0] ic_mem_addr, ic_mem_instr;
     logic        ic_mem_req, ic_mem_burst, ic_mem_ready;
-    logic        icache_hit, icache_miss;
+    logic        icache_miss;
 
     if (ICACHE_BYTES == 0) begin : g_no_icache
         assign ic_mem_addr  = pc_out;
@@ -53,7 +64,6 @@ module cpu #(
         assign ic_mem_burst = 1'b0;
         assign instr_if     = ic_mem_instr;
         assign imem_ready   = ic_mem_ready;
-        assign icache_hit   = 1'b0;
         assign icache_miss  = 1'b0;
     end else begin : g_icache
         icache #(
@@ -65,7 +75,7 @@ module cpu #(
             .addr(pc_out), .instr(instr_if), .ready(imem_ready),
             .mem_addr(ic_mem_addr), .mem_req(ic_mem_req), .mem_burst(ic_mem_burst),
             .mem_instr(ic_mem_instr), .mem_ready(ic_mem_ready),
-            .hit(icache_hit), .miss_pulse(icache_miss)
+            .miss_pulse(icache_miss)
         );
     end
 
@@ -450,12 +460,48 @@ module cpu #(
         .load_data(mem_read_data_mem)
     );
 
+    // Data path: optionally through the D-cache, otherwise straight to memory.
+    logic [31:0] dc_mem_addr, dc_mem_write_word, dc_mem_read_word;
+    logic [3:0]  dc_mem_byte_en;
+    logic        dc_mem_req, dc_mem_burst, dc_mem_ready;
+    logic        dcache_access, dcache_miss;
+
+    if (DCACHE_BYTES == 0) begin : g_no_dcache
+        assign dc_mem_addr       = alu_result_mem;
+        assign dc_mem_req        = dmem_req;
+        assign dc_mem_burst      = 1'b0;
+        assign dc_mem_byte_en    = dm_byte_en;
+        assign dc_mem_write_word = dm_store_word;
+        assign dm_read_word      = dc_mem_read_word;
+        assign dmem_ready        = dc_mem_ready;
+        assign dcache_access     = 1'b0;
+        assign dcache_miss       = 1'b0;
+        assign dbg_flush_done    = dbg_flush;   // nothing cached, nothing to do
+    end else begin : g_dcache
+        dcache #(
+            .BYTES(DCACHE_BYTES),
+            .BLOCK_WORDS(DCACHE_BLOCK_WORDS),
+            .WAYS(DCACHE_WAYS),
+            .WRITE_BACK(DCACHE_WRITE_BACK)
+        ) u_dcache (
+            .clk(clk), .rst(rst),
+            .req(dmem_req), .addr(alu_result_mem),
+            .byte_en(dm_byte_en), .write_word(dm_store_word),
+            .read_word(dm_read_word), .ready(dmem_ready),
+            .mem_addr(dc_mem_addr), .mem_req(dc_mem_req), .mem_burst(dc_mem_burst),
+            .mem_byte_en(dc_mem_byte_en), .mem_write_word(dc_mem_write_word),
+            .mem_read_word(dc_mem_read_word), .mem_ready(dc_mem_ready),
+            .flush_req(dbg_flush), .flush_done(dbg_flush_done),
+            .access(dcache_access), .miss_pulse(dcache_miss)
+        );
+    end
+
     data_mem #(.LATENCY(DMEM_LATENCY)) u_data_mem (
         .clk(clk), .rst(rst),
-        .req(dmem_req), .burst(1'b0),
-        .addr(alu_result_mem),
-        .byte_en(dm_byte_en), .write_word(dm_store_word),
-        .read_word(dm_read_word), .ready(dmem_ready)
+        .req(dc_mem_req), .burst(dc_mem_burst),
+        .addr(dc_mem_addr),
+        .byte_en(dc_mem_byte_en), .write_word(dc_mem_write_word),
+        .read_word(dc_mem_read_word), .ready(dc_mem_ready)
     );
 
     // ---- Commit point: traps, MRET, and CSR writes all resolve here ----
@@ -592,17 +638,22 @@ module cpu #(
             perf_mispredict_count <= 32'd0;
             perf_branch_count     <= 32'd0;
             perf_mem_stall_count  <= 32'd0;
-            perf_icache_hit       <= 32'd0;
+            perf_icache_access    <= 32'd0;
             perf_icache_miss      <= 32'd0;
+            perf_dcache_access    <= 32'd0;
+            perf_dcache_miss      <= 32'd0;
         end else begin
             perf_cycle_count      <= perf_cycle_count + 32'd1;
             perf_mem_stall_count  <= perf_mem_stall_count + (pipe_stall ? 32'd1 : 32'd0);
-            // One miss per refill (miss_pulse is already a single cycle), one
-            // hit per fetch that actually advanced - a frozen pipe re-presents
-            // the same hitting address every cycle it is held.
-            perf_icache_miss      <= perf_icache_miss + (icache_miss ? 32'd1 : 32'd0);
-            perf_icache_hit       <= perf_icache_hit
-                                     + ((icache_hit && !pipe_stall) ? 32'd1 : 32'd0);
+            // Accesses are counted where they complete (one per advancing
+            // cycle), misses where they are decided (already one pulse each).
+            // Hit rate is then 1 - miss/access, which is the only combination
+            // that doesn't score a refilled access as a hit as well as a miss.
+            perf_icache_access    <= perf_icache_access + (pipe_stall ? 32'd0 : 32'd1);
+            perf_icache_miss      <= perf_icache_miss   + (icache_miss ? 32'd1 : 32'd0);
+            perf_dcache_access    <= perf_dcache_access
+                                     + ((dcache_access && !pipe_stall) ? 32'd1 : 32'd0);
+            perf_dcache_miss      <= perf_dcache_miss   + (dcache_miss ? 32'd1 : 32'd0);
             if (!pipe_stall) begin
                 perf_instr_retired    <= perf_instr_retired + (valid_wb ? 32'd1 : 32'd0);
                 perf_stall_count      <= perf_stall_count   + (load_use_stall ? 32'd1 : 32'd0);

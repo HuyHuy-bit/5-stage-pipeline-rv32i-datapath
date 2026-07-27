@@ -76,6 +76,7 @@ int main(int argc, char** argv) {
         top->clk = 1; top->eval(); ctx->timeInc(1); if (tfp) tfp->dump(ctx->time());
     };
 
+    top->dbg_flush = 0;
     top->rst = 1; tick(); top->rst = 0;
 
     const int timeout = (cycles > 0 ? cycles : 20) * 50 + 1000;
@@ -103,6 +104,25 @@ int main(int argc, char** argv) {
         }
         prev_pc = cur_pc;
     }
+
+    // Snapshot the counters before the flush. The flush is a harness action,
+    // not part of the workload, and its cycles would otherwise be billed to the
+    // benchmark and inflate CPI.
+    struct { uint32_t cyc, instret, stalls, flushes, mispred, branches, memstall,
+                      icacc, icmiss, dcacc, dcmiss; } pc_snap = {
+        top->perf_cycle_count,   top->perf_instr_retired, top->perf_stall_count,
+        top->perf_flush_count,   top->perf_mispredict_count, top->perf_branch_count,
+        top->perf_mem_stall_count,
+        top->perf_icache_access, top->perf_icache_miss,
+        top->perf_dcache_access, top->perf_dcache_miss };
+
+    // Write back every dirty D-cache line before anything reads memory. With a
+    // write-back cache the newest copy of a word can still be sitting in the
+    // cache, so a signature taken straight from data_mem would be stale.
+    top->dbg_flush = 1;
+    for (int i = 0; i < 2000000 && !top->dbg_flush_done; i++) tick();
+    if (!top->dbg_flush_done) std::cerr << "Warning: D-cache flush did not complete\n";
+    top->dbg_flush = 0;
 
     if (tfp) tfp->close();
 
@@ -151,13 +171,13 @@ int main(int argc, char** argv) {
 
     // Performance summary (cycle-count / instret / stall / flush counters,
     // added in response to project-review feedback).
-    uint32_t cyc     = top->perf_cycle_count;
-    uint32_t instret = top->perf_instr_retired;
-    uint32_t stalls   = top->perf_stall_count;
-    uint32_t flushes  = top->perf_flush_count;
-    uint32_t mispred  = top->perf_mispredict_count;
-    uint32_t branches = top->perf_branch_count;
-    uint32_t memstall = top->perf_mem_stall_count;
+    uint32_t cyc      = pc_snap.cyc;
+    uint32_t instret  = pc_snap.instret;
+    uint32_t stalls   = pc_snap.stalls;
+    uint32_t flushes  = pc_snap.flushes;
+    uint32_t mispred  = pc_snap.mispred;
+    uint32_t branches = pc_snap.branches;
+    uint32_t memstall = pc_snap.memstall;
     double   cpi      = instret ? (double)cyc / (double)instret : 0.0;
     double   acc      = branches ? 100.0 * (double)(branches - mispred) / (double)branches : 0.0;
     std::cout << "  perf: cycles=" << cyc
@@ -170,13 +190,21 @@ int main(int argc, char** argv) {
               << " mispredicts=" << mispred
               << " accuracy=" << acc << "%\n";
 
-    uint32_t ichit  = top->perf_icache_hit;
-    uint32_t icmiss = top->perf_icache_miss;
-    uint32_t icacc  = ichit + icmiss;
-    double   ichr   = icacc ? 100.0 * (double)ichit / (double)icacc : 0.0;
-    std::cout << "  icache: hits=" << ichit
+    // Hit rate is 1 - miss/access: accesses counted on completion, misses at
+    // the point the line was found absent.
+    uint32_t icacc  = pc_snap.icacc;
+    uint32_t icmiss = pc_snap.icmiss;
+    double   ichr   = icacc ? 100.0 * (double)(icacc - icmiss) / (double)icacc : 0.0;
+    std::cout << "  icache: accesses=" << icacc
               << " misses=" << icmiss
               << " hitrate=" << ichr << "%\n";
+
+    uint32_t dcacc  = pc_snap.dcacc;
+    uint32_t dcmiss = pc_snap.dcmiss;
+    double   dchr   = dcacc ? 100.0 * (double)(dcacc - dcmiss) / (double)dcacc : 0.0;
+    std::cout << "  dcache: accesses=" << dcacc
+              << " misses=" << dcmiss
+              << " hitrate=" << dchr << "%\n";
 
     return ok ? 0 : 1;
 }
