@@ -27,7 +27,10 @@ def j_type(rd,off):
     return ((o>>20&1)<<31)|((o>>1&0x3FF)<<21)|((o>>11&1)<<20)|((o>>12&0xFF)<<12)|(r(rd)<<7)|0x6F
 
 def assemble(src):
-    CSRS={'mtvec':0x305,'mepc':0x341,'mcause':0x342}
+    CSRS={'mtvec':0x305,'mepc':0x341,'mcause':0x342,
+          'mscratch':0x340,'mtval':0x343,'misa':0x301,
+          'mvendorid':0xF11,'marchid':0xF12,'mimpid':0xF13,'mhartid':0xF14,
+          'mcycle':0xB00,'minstret':0xB02,'mcycleh':0xB80,'minstreth':0xB82}
     def CSR_NUM(s):
         s=s.strip().lower()
         return CSRS[s] if s in CSRS else (int(s,0)&0xFFF)

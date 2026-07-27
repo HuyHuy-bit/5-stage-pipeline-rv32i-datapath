@@ -365,6 +365,15 @@ module cpu #(
     assign bp_update_taken  = actual_taken;
     assign bp_update_target = actual_target;
 
+    // CSRRW(I) always writes; CSRRS/CSRRC(I) only when the operand is
+    // nonzero (rs1 field doubles as the 5-bit uimm for the *I variants, so
+    // rs1_addr_ex works for both forms).
+    logic csr_attempts_write, csr_access_illegal;
+    assign csr_attempts_write = (funct3_ex == F3_CSRRW) || (funct3_ex == F3_CSRRWI)
+                               || (rs1_addr_ex != 5'd0);
+    assign csr_access_illegal = !csr_implemented(csr_addr_ex)
+                               || (csr_attempts_write && csr_read_only(csr_addr_ex));
+
     // ---- EX-stage exception detection (Part 1: illegal instruction) ----
     // Detected here, but not acted on until the commit point in MEM, so that
     // exceptions resolve in program order (precise). Part 2 adds misaligned
@@ -377,6 +386,20 @@ module cpu #(
         if (valid_ex && illegal_ex) begin
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
+        end else if (valid_ex && is_csr_ex && csr_access_illegal) begin
+            // Either the address isn't implemented at all, or it's a
+            // structurally read-only CSR ([11:10]==11) and this access
+            // actually attempts a write (CSRRW(I) always writes; CSRRS/C(I)
+            // only when the rs1/uimm operand is nonzero).
+            exc_pending_ex = 1'b1;
+            exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
+        end else if (valid_ex && is_cf_instr && actual_taken && actual_target[1]
+                     && (pc_src_ex == PC_SRC_BRANCH || pc_src_ex == PC_SRC_JAL)) begin
+            // Without the C extension, a taken branch or JAL must land on a
+            // 4-byte boundary. JALR already masks bit 0 of its target (see
+            // its assign above) and is out of scope here, matching the plan.
+            exc_pending_ex = 1'b1;
+            exc_cause_ex   = CAUSE_MISALIGNED_FETCH;
         end else if (valid_ex && mem_read_ex) begin
             if ((funct3_ex[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
                 (funct3_ex[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
@@ -511,6 +534,7 @@ module cpu #(
     // gets flushed.
     logic        trap_take;       // a trap fires this cycle
     logic [31:0] trap_cause_w;
+    logic [31:0] trap_val_w;      // -> mtval: faulting address or instruction, if any
     logic        mret_take;       // an MRET commits this cycle
     logic        csr_commit;      // a CSR instruction commits its write this cycle
 
@@ -522,6 +546,7 @@ module cpu #(
     always_comb begin
         trap_take    = 1'b0;
         trap_cause_w = 32'd0;
+        trap_val_w   = 32'd0;
         mret_take    = 1'b0;
         csr_commit   = 1'b0;
 
@@ -534,6 +559,15 @@ module cpu #(
             if (exc_pending_mem) begin
                 trap_take    = 1'b1;               // illegal instruction (Part 1)
                 trap_cause_w = exc_cause_mem;
+                // mtval: faulting address for a misaligned access, the
+                // offending word for illegal instruction (including an
+                // illegal CSR access), 0 for misaligned-fetch (the target
+                // isn't carried this far — spec permits mtval reading 0).
+                case (exc_cause_mem)
+                    CAUSE_ILLEGAL_INSTR:                       trap_val_w = instr_mem_r;
+                    CAUSE_MISALIGNED_LOAD, CAUSE_MISALIGNED_STORE: trap_val_w = alu_result_mem;
+                    default: trap_val_w = 32'd0;
+                endcase
             end else if (is_ecall_mem) begin
                 trap_take    = 1'b1;
                 trap_cause_w = CAUSE_ECALL_M;
@@ -556,9 +590,11 @@ module cpu #(
         .csr_funct3(csr_funct3_mem),
         .csr_wdata(csr_wdata_mem),
         .csr_rdata(csr_rdata_commit),   // old CSR value -> write-back to rd
+        .cycle_count(perf_cycle_count), .instret_count(perf_instr_retired),
         .trap_en(trap_take),
         .trap_pc(pc_mem),
         .trap_cause(trap_cause_w),
+        .trap_val(trap_val_w),
         .mtvec_out(mtvec_val),
         .mret_en(mret_take),
         .mepc_out(mepc_val)

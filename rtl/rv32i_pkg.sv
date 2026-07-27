@@ -79,9 +79,24 @@ package rv32i_pkg;
     localparam logic [31:0] INSTR_MRET   = 32'h30200073;
 
     // ---- CSR addresses (instr[31:20]) - minimal M-mode set ----
-    localparam logic [11:0] CSR_MTVEC = 12'h305;
-    localparam logic [11:0] CSR_MEPC  = 12'h341;
-    localparam logic [11:0] CSR_MCAUSE = 12'h342;
+    localparam logic [11:0] CSR_MTVEC     = 12'h305;
+    localparam logic [11:0] CSR_MEPC      = 12'h341;
+    localparam logic [11:0] CSR_MCAUSE    = 12'h342;
+    localparam logic [11:0] CSR_MSCRATCH  = 12'h340;
+    localparam logic [11:0] CSR_MTVAL     = 12'h343;
+    localparam logic [11:0] CSR_MISA      = 12'h301;
+    localparam logic [11:0] CSR_MVENDORID = 12'hF11;
+    localparam logic [11:0] CSR_MARCHID   = 12'hF12;
+    localparam logic [11:0] CSR_MIMPID    = 12'hF13;
+    localparam logic [11:0] CSR_MHARTID   = 12'hF14;
+    localparam logic [11:0] CSR_MCYCLE    = 12'hB00;
+    localparam logic [11:0] CSR_MINSTRET  = 12'hB02;
+    localparam logic [11:0] CSR_MCYCLEH   = 12'hB80;
+    localparam logic [11:0] CSR_MINSTRETH = 12'hB82;
+
+    // misa: MXL=1 (32-bit) in [31:30], extension bit 'I' (bit 8). No other
+    // extensions implemented.
+    localparam logic [31:0] MISA_VALUE = 32'h4000_0100;
 
     // ---- Exception cause codes (mcause, interrupt bit = 0) ----
     localparam logic [31:0] CAUSE_MISALIGNED_FETCH = 32'd0;
@@ -90,5 +105,25 @@ package rv32i_pkg;
     localparam logic [31:0] CAUSE_MISALIGNED_LOAD  = 32'd4;
     localparam logic [31:0] CAUSE_MISALIGNED_STORE = 32'd6;
     localparam logic [31:0] CAUSE_ECALL_M          = 32'd11;
+
+    // Every CSR address this core implements. Used both to decide whether an
+    // access should trap illegal (cpu.sv) and to dispatch reads/writes
+    // (csr.sv) — one list instead of two that can drift apart.
+    function automatic logic csr_implemented(input logic [11:0] addr);
+        case (addr)
+            CSR_MTVEC, CSR_MEPC, CSR_MCAUSE, CSR_MSCRATCH, CSR_MTVAL, CSR_MISA,
+            CSR_MVENDORID, CSR_MARCHID, CSR_MIMPID, CSR_MHARTID,
+            CSR_MCYCLE, CSR_MINSTRET, CSR_MCYCLEH, CSR_MINSTRETH:
+                csr_implemented = 1'b1;
+            default:
+                csr_implemented = 1'b0;
+        endcase
+    endfunction
+
+    // Address bits [11:10] == 2'b11 is the standard RISC-V convention for a
+    // read-only CSR; a write attempt to one must trap illegal-instruction.
+    function automatic logic csr_read_only(input logic [11:0] addr);
+        csr_read_only = (addr[11:10] == 2'b11);
+    endfunction
 
 endpackage

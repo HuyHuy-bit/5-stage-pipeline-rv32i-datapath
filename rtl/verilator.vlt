@@ -25,3 +25,7 @@ lint_off -rule UNUSEDPARAM -file "*/rv32i_pkg.sv" -match "*CAUSE_MISALIGNED_FETC
 // clk/rst/req/burst/addr fold out of mem_timing at the default LATENCY=1
 // elaboration used for plain `make lint`; they're live at LATENCY>1.
 lint_off -rule UNUSEDSIGNAL -file "*/mem_timing.sv"
+
+// csr_read_only(addr) intentionally only inspects addr[11:10]; the standard
+// RISC-V read-only-CSR convention.
+lint_off -rule UNUSEDSIGNAL -file "*/rv32i_pkg.sv" -match "*'addr'*"

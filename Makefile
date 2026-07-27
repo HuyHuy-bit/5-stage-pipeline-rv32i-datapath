@@ -38,7 +38,7 @@ endif
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
 
-TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret
+TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
 .PHONY: all sim assemble test memtiming bench lint wave clean coverage
