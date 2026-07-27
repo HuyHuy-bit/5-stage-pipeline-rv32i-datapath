@@ -438,14 +438,24 @@ module cpu #(
     logic dmem_req;
     assign dmem_req = valid_mem && (mem_read_mem || mem_write_mem) && !exc_pending_mem;
 
-    logic [31:0] mem_read_data_mem;
+    logic [31:0] mem_read_data_mem;   // load result, extended, into MEM/WB
+    logic [3:0]  dm_byte_en;
+    logic [31:0] dm_store_word, dm_read_word;
+
+    lsu u_lsu (
+        .funct3(funct3_mem), .byte_off(alu_result_mem[1:0]),
+        .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
+        .store_data(rs2_data_mem), .mem_word(dm_read_word),
+        .byte_en(dm_byte_en), .store_word(dm_store_word),
+        .load_data(mem_read_data_mem)
+    );
+
     data_mem #(.LATENCY(DMEM_LATENCY)) u_data_mem (
         .clk(clk), .rst(rst),
-        .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
         .req(dmem_req), .burst(1'b0),
-        .funct3(funct3_mem),
-        .addr(alu_result_mem), .write_data(rs2_data_mem),
-        .read_data(mem_read_data_mem), .ready(dmem_ready)
+        .addr(alu_result_mem),
+        .byte_en(dm_byte_en), .write_word(dm_store_word),
+        .read_word(dm_read_word), .ready(dmem_ready)
     );
 
     // ---- Commit point: traps, MRET, and CSR writes all resolve here ----

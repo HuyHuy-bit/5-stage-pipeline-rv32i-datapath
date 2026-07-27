@@ -7,7 +7,7 @@ CPU_SRCS = rtl/rv32i_pkg.sv \
            rtl/alu.sv rtl/control.sv rtl/data_mem.sv rtl/branch_unit.sv \
            rtl/if_id_reg.sv rtl/id_ex_reg.sv rtl/ex_mem_reg.sv rtl/mem_wb_reg.sv \
            rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/csr.sv \
-           rtl/mem_timing.sv rtl/icache.sv
+           rtl/mem_timing.sv rtl/icache.sv rtl/lsu.sv
 
 VFLAGS   = --cc --exe --build --trace -j 0
 OBJDIR   = obj_dir
