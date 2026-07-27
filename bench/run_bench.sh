@@ -18,14 +18,14 @@ ROOT="$(dirname "$BENCH_DIR")"
 LD="$ROOT/compliance/link/rv32i-pipeline.ld"
 ELF2HEX="$ROOT/compliance/elf2hex.py"
 WORK="${TMPDIR:-/tmp}/rv32i_bench"
-CYCLES=200000          # testbench timeout multiplier, not a cycle budget
+CYCLES=600000         # testbench timeout multiplier, not a cycle budget
 
 LATENCY="${1:-1}"
 IC_BYTES="${2:-0}"
 IC_BLOCK="${3:-4}"
 IC_WAYS="${4:-1}"
 
-KERNELS=(crc32 matmul sort llist)
+KERNELS=(crc32 matmul sort llist interp)
 mkdir -p "$WORK"
 
 if [ "$LATENCY" -le 1 ] && [ "$IC_BYTES" -eq 0 ]; then
@@ -72,7 +72,7 @@ for k in "${KERNELS[@]}"; do
 
     # --- target build ---
     if ! riscv64-unknown-elf-gcc -march=rv32i -mabi=ilp32 -O2 -static -mcmodel=medany \
-            -nostdlib -nostartfiles -ffreestanding -fno-builtin \
+            -nostdlib -nostartfiles -ffreestanding -fno-builtin -fno-jump-tables \
             -T "$LD" "$BENCH_DIR/crt0.S" "$src" -o "$WORK/$k.elf" -lgcc \
             2> "$WORK/$k.build.log"; then
         echo "$k: target build failed - see $WORK/$k.build.log" >&2
