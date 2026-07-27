@@ -3,7 +3,13 @@
 // cpu.sv - top-level module: 5-stage pipelined RV32I CPU.
 module cpu #(
     parameter int IMEM_LATENCY = 1,
-    parameter int DMEM_LATENCY = 1
+    parameter int DMEM_LATENCY = 1,
+    // ICACHE_BYTES = 0 bypasses the cache entirely and wires fetch straight to
+    // instr_mem, so the no-cache baseline stays bit-for-bit what it was before
+    // the cache existed rather than being a degenerate cache configuration.
+    parameter int ICACHE_BYTES       = 0,
+    parameter int ICACHE_BLOCK_WORDS = 4,
+    parameter int ICACHE_WAYS        = 1
 ) (
     input  logic clk,
     input  logic rst,
@@ -13,7 +19,9 @@ module cpu #(
     output logic [31:0] perf_flush_count,
     output logic [31:0] perf_mispredict_count,
     output logic [31:0] perf_branch_count,
-    output logic [31:0] perf_mem_stall_count
+    output logic [31:0] perf_mem_stall_count,
+    output logic [31:0] perf_icache_hit,
+    output logic [31:0] perf_icache_miss
 );
 
     // IF stage
@@ -34,10 +42,37 @@ module cpu #(
     logic imem_ready, dmem_ready, pipe_stall;
     assign pipe_stall = !imem_ready || !dmem_ready;
 
+    // Fetch path: optionally through the I-cache, otherwise straight to memory.
+    logic [31:0] ic_mem_addr, ic_mem_instr;
+    logic        ic_mem_req, ic_mem_burst, ic_mem_ready;
+    logic        icache_hit, icache_miss;
+
+    if (ICACHE_BYTES == 0) begin : g_no_icache
+        assign ic_mem_addr  = pc_out;
+        assign ic_mem_req   = 1'b1;   // bare fetch: every access is independent
+        assign ic_mem_burst = 1'b0;
+        assign instr_if     = ic_mem_instr;
+        assign imem_ready   = ic_mem_ready;
+        assign icache_hit   = 1'b0;
+        assign icache_miss  = 1'b0;
+    end else begin : g_icache
+        icache #(
+            .BYTES(ICACHE_BYTES),
+            .BLOCK_WORDS(ICACHE_BLOCK_WORDS),
+            .WAYS(ICACHE_WAYS)
+        ) u_icache (
+            .clk(clk), .rst(rst),
+            .addr(pc_out), .instr(instr_if), .ready(imem_ready),
+            .mem_addr(ic_mem_addr), .mem_req(ic_mem_req), .mem_burst(ic_mem_burst),
+            .mem_instr(ic_mem_instr), .mem_ready(ic_mem_ready),
+            .hit(icache_hit), .miss_pulse(icache_miss)
+        );
+    end
+
     instr_mem #(.LATENCY(IMEM_LATENCY)) u_instr_mem (
         .clk(clk), .rst(rst),
-        .req(1'b1), .burst(1'b0),   // bare fetch: every access is independent
-        .addr(pc_out), .instr(instr_if), .ready(imem_ready)
+        .req(ic_mem_req), .burst(ic_mem_burst),
+        .addr(ic_mem_addr), .instr(ic_mem_instr), .ready(ic_mem_ready)
     );
 
     // Front-end branch prediction: index BHT+BTB with the fetch PC. On a
@@ -547,9 +582,17 @@ module cpu #(
             perf_mispredict_count <= 32'd0;
             perf_branch_count     <= 32'd0;
             perf_mem_stall_count  <= 32'd0;
+            perf_icache_hit       <= 32'd0;
+            perf_icache_miss      <= 32'd0;
         end else begin
             perf_cycle_count      <= perf_cycle_count + 32'd1;
             perf_mem_stall_count  <= perf_mem_stall_count + (pipe_stall ? 32'd1 : 32'd0);
+            // One miss per refill (miss_pulse is already a single cycle), one
+            // hit per fetch that actually advanced - a frozen pipe re-presents
+            // the same hitting address every cycle it is held.
+            perf_icache_miss      <= perf_icache_miss + (icache_miss ? 32'd1 : 32'd0);
+            perf_icache_hit       <= perf_icache_hit
+                                     + ((icache_hit && !pipe_stall) ? 32'd1 : 32'd0);
             if (!pipe_stall) begin
                 perf_instr_retired    <= perf_instr_retired + (valid_wb ? 32'd1 : 32'd0);
                 perf_stall_count      <= perf_stall_count   + (load_use_stall ? 32'd1 : 32'd0);

@@ -170,5 +170,13 @@ int main(int argc, char** argv) {
               << " mispredicts=" << mispred
               << " accuracy=" << acc << "%\n";
 
+    uint32_t ichit  = top->perf_icache_hit;
+    uint32_t icmiss = top->perf_icache_miss;
+    uint32_t icacc  = ichit + icmiss;
+    double   ichr   = icacc ? 100.0 * (double)ichit / (double)icacc : 0.0;
+    std::cout << "  icache: hits=" << ichit
+              << " misses=" << icmiss
+              << " hitrate=" << ichr << "%\n";
+
     return ok ? 0 : 1;
 }
