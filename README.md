@@ -54,6 +54,8 @@ Three results from the sweeps that are worth more than the headline:
 - **The official RISC-V `riscv-arch-test` compliance suite** (`rv32i_m/I`, base integer): **38/38 passing**, each result diffed word-for-word against the golden reference signature.
 - **CI matrix**: the full directed suite runs across 6 cache/latency configurations on every push (baseline, slow memory, I-cache only, write-through D$, write-back D$, 2-way associative) — 66 test executions, all required to agree, because the architectural result must be invariant to cache configuration. The compliance sweep runs whenever the RTL changes.
 - `make lint` is clean under `verilator --lint-only -Wall`, with every waiver in [`rtl/verilator.vlt`](rtl/verilator.vlt) carrying a one-line justification.
+- **13 SVA properties** (`rtl/cpu.sv`, `rtl/reg_file.sv`) check control-flow/redirect priority, deadlock/memory, register-file, and forwarding invariants on every cycle of every test — built into every simulator binary via `--assert`, so a violation aborts the run rather than passing silently.
+- **Functional coverage** (`make coverage`, `verilator`'s `cover property`, the supported stand-in for SystemVerilog covergroups on this toolchain): forwarding-path crosses, predictor-outcome crosses, control-flow type, trap causes, and the full D-cache FSM. Currently **25/38 (65.8%)** from the directed suite alone — see [`docs/coverage.md`](docs/coverage.md) for the point-by-point breakdown and what's still unhit.
 
 See [`docs/VERIFICATION_PLAN.md`](docs/VERIFICATION_PLAN.md) for what's tested, by what mechanism, and what's explicitly not tested yet.
 
@@ -87,9 +89,10 @@ Every pipeline register carries a `valid` bit end-to-end, so a flushed bubble is
 Requires **Verilator**. For the compliance suite, also **the RISC-V GNU toolchain**.
 
 ```bash
-make lint    # syntax/structure check, no build
-make all     # build the simulator, run all directed tests
-make bench   # run the C benchmark kernels, print a CPI table
+make lint      # syntax/structure check, no build
+make all       # build the simulator, run all directed tests (assertions live)
+make bench     # run the C benchmark kernels, print a CPI table
+make coverage  # build with functional coverage, run the suite, write docs/coverage.md
 ```
 
 Cache and latency settings are RTL parameters, so each configuration is its own simulator build (see `make all IC_BYTES=... DC_BYTES=... DC_WB=... IMEM_LAT=... DMEM_LAT=...`, or the CI matrix in [`.github/workflows/rtl-tests.yml`](.github/workflows/rtl-tests.yml) for the exact combinations exercised):

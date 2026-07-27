@@ -664,6 +664,118 @@ module cpu #(
         end
     end
 
+    // ---- Design invariants, checked every cycle of every test ----
+    // Each property below is an invariant already explained in a comment
+    // elsewhere in this file; this is that same reasoning made falsifiable.
+
+    // -- control-flow / redirect --
+    a_trap_mret_excl: assert property (@(posedge clk) disable iff (rst)
+        !(trap_take && mret_take));
+    a_freeze_pc_stable: assert property (@(posedge clk) disable iff (rst)
+        pipe_stall |=> $stable(pc_out));
+    a_redirect_priority_trap: assert property (@(posedge clk) disable iff (rst)
+        (trap_redirect && !pipe_stall) |-> (next_pc == trap_target));
+    a_redirect_priority_mispredict: assert property (@(posedge clk) disable iff (rst)
+        (ex_flush && !pipe_stall && !trap_redirect) |-> (next_pc == ex_resolved_target));
+
+    // -- deadlock / memory --
+    a_no_faulting_req: assert property (@(posedge clk) disable iff (rst)
+        dmem_req |-> !exc_pending_mem);
+    // dbg_flush is a testbench-only cache-drain hook, not a hazard stall — it
+    // can legitimately hold pipe_stall for as long as it takes to walk every
+    // set/way of the D-cache, which is unbounded by this property's design.
+    a_stall_bounded: assert property (@(posedge clk) disable iff (rst || dbg_flush)
+        pipe_stall |-> ##[1:256] (pipe_stall == 1'b0));
+
+    // -- register file / writeback --
+    // x0-never-written lives in reg_file.sv, next to the array it protects.
+    a_bubble_no_retire: assert property (@(posedge clk) disable iff (rst)
+        !valid_wb |-> !reg_write_en_wb);
+    a_trap_no_retire: assert property (@(posedge clk) disable iff (rst)
+        trap_take |-> !reg_write_en_mem_gated);
+
+    // -- forwarding --
+    a_fwd_a_priority: assert property (@(posedge clk) disable iff (rst)
+        (reg_write_en_mem && rd_addr_mem != 5'd0 && rd_addr_mem == rs1_addr_ex)
+        |-> forward_a == 2'b01);
+    a_fwd_b_priority: assert property (@(posedge clk) disable iff (rst)
+        (reg_write_en_mem && rd_addr_mem != 5'd0 && rd_addr_mem == rs2_addr_ex)
+        |-> forward_b == 2'b01);
+    a_fwd_a_no_x0: assert property (@(posedge clk) disable iff (rst)
+        rs1_addr_ex == 5'd0 |-> forward_a == 2'b00);
+    a_fwd_b_no_x0: assert property (@(posedge clk) disable iff (rst)
+        rs2_addr_ex == 5'd0 |-> forward_b == 2'b00);
+
+    // ---- Functional coverage ----
+    // SystemVerilog covergroups aren't supported by this toolchain (COVERIGN);
+    // cover property is the supported equivalent and feeds the same
+    // --coverage database, read back with verilator_coverage. Crosses are
+    // written out as explicit conjunctions since there's no native cross.
+`ifdef VERILATOR
+    logic cov_en; assign cov_en = !rst;
+
+    // forward_a x forward_b (9 crosses)
+    genvar gi, gj;
+    generate
+        for (gi = 0; gi < 3; gi++) begin : g_fwd_a
+            for (gj = 0; gj < 3; gj++) begin : g_fwd_b
+                cover property (@(posedge clk) disable iff (rst)
+                    cov_en && forward_a == gi[1:0] && forward_b == gj[1:0]);
+            end
+        end
+    endgenerate
+
+    // predictor outcome: predicted_taken x actual_taken x target_match, only
+    // meaningful for an actual control-flow instruction in EX
+    logic cov_target_match;
+    assign cov_target_match = (actual_target == predicted_target_ex);
+    c_pred_tt_match:   cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && actual_taken && cov_target_match);
+    c_pred_tt_mismatch: cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && actual_taken && !cov_target_match);
+    c_pred_tn:          cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && !actual_taken);
+    c_pred_nt:          cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && !predicted_taken_ex && actual_taken);
+    c_pred_nn:          cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && !predicted_taken_ex && !actual_taken);
+    c_false_predict:    cover property (@(posedge clk) disable iff (rst)
+        cov_en && false_predict);
+
+    // control-flow type (pc_src_ex) x taken/not-taken
+    c_branch_taken:    cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == 2'b01 && actual_taken);
+    c_branch_nottaken: cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == 2'b01 && !actual_taken);
+    c_jalr:            cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == 2'b10);
+    c_jal:              cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == 2'b11);
+
+    // trap cause, each implemented cause hit at least once
+    c_cause_illegal:    cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_ILLEGAL_INSTR);
+    c_cause_mis_load:   cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_MISALIGNED_LOAD);
+    c_cause_mis_store:  cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_MISALIGNED_STORE);
+    c_cause_ecall:      cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_ECALL_M);
+    c_cause_ebreak:     cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_BREAKPOINT);
+    c_mret:             cover property (@(posedge clk) disable iff (rst)
+        cov_en && mret_take);
+
+    // hazard interactions
+    c_load_use_and_mispredict: cover property (@(posedge clk) disable iff (rst)
+        cov_en && load_use_stall && ex_flush);
+    // trap_redirect only ever fires when !pipe_stall (see the commit-point
+    // comment above), so the interesting cross is a trap-eligible instruction
+    // parked in MEM *during* a stall, one cycle before it can commit.
+    c_trap_pending_and_stall: cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_mem && exc_pending_mem && pipe_stall);
+`endif
+
 endmodule
 
 `default_nettype wire

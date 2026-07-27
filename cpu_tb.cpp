@@ -6,6 +6,7 @@
 #include "Vcpu___024root.h"
 #include "verilated.h"
 #include "verilated_vcd_c.h"
+#include "verilated_cov.h"
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
@@ -205,6 +206,13 @@ int main(int argc, char** argv) {
     std::cout << "  dcache: accesses=" << dcacc
               << " misses=" << dcmiss
               << " hitrate=" << dchr << "%\n";
+
+#if VM_COVERAGE
+    // Each invocation (one per test/kernel) writes its own .dat; a build
+    // without --coverage never defines VM_COVERAGE, so this is a no-op there.
+    std::string covfile = strarg(argc, argv, "+COVERAGE=", "");
+    if (!covfile.empty()) VerilatedCov::write(covfile.c_str());
+#endif
 
     return ok ? 0 : 1;
 }

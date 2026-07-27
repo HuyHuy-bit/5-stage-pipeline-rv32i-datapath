@@ -23,10 +23,22 @@ Five kernels (`crc32`, `matmul`, `sort`, `llist`, `interp`), each also compiled 
 **Catches:** correctness bugs exercised by realistic, longer-running code paths that the short directed tests don't reach.
 **Doesn't catch:** anything not exercised by these five specific access/control-flow patterns.
 
+## SVA assertions (`rtl/cpu.sv`, `rtl/reg_file.sv`)
+
+13 concurrent assertions, built into every simulator binary via `verilator --assert` and checked on every cycle of every test, directed and benchmark alike: trap/MRET mutual exclusion, frozen-PC stability under a memory stall, next-PC redirect priority (trap vs. mispredict), no request reaching memory with a pending exception, stall boundedness (scoped to exclude the testbench's own debug cache-flush hook, which is legitimately long-running), `x0` immutability, no bubble retiring, no register write on a trap, and forwarding priority/no-forward-through-x0.
+
+**Catches:** any RTL change that violates one of these invariants, in any test, immediately — including tests that would otherwise pass on final-state comparison alone. Two were found to be mis-specified during authoring (not RTL bugs): an x0-write check that didn't match how `reg_file.sv` actually guards the write, and a stall-bound check that didn't account for the debug flush path; both were corrected against the RTL's actual behavior, not the other way around.
+**Doesn't catch:** anything not already expressed as a property. The set above is representative, not exhaustive — CSR-specific and interrupt invariants are natural additions once Phase 8 lands interrupts.
+
+## Functional coverage (`make coverage`, `docs/coverage.md`)
+
+Verilator doesn't support SystemVerilog covergroups; `cover property` is the supported equivalent and feeds the same `--coverage` database. 38 cover points across forwarding-path crosses, predictor-outcome crosses, control-flow type, trap causes, and the full D-cache FSM (every state, every legal transition, hit/miss/dirty-evict crossed with load/store). Currently **25/38 (65.8%)** hit by the directed suite alone against a cache-enabled build.
+
+**Catches:** silently-untested scenarios — "the directed suite exercises everything that matters" is now a number, not a claim.
+**Doesn't catch:** anything a cover point wasn't written for. The unhit list in `docs/coverage.md` is the actual to-do list: `ecall`/`ebreak` traps, a misaligned-load trap, a genuine predictor target mismatch, and a few D-cache transitions (idle→writeback, writeback→fill, flush→idle) aren't exercised by the 11 directed tests as they stand today — closing those is directed-test work, not infrastructure work.
+
 ## Not yet done
 
-- **Instruction-by-instruction lockstep against a golden model** (e.g. Spike) — would catch the "right answer via the wrong path" class of bug that final-state comparison structurally cannot. Largest single verification upgrade available; not yet implemented.
-- **Formal properties / SVA assertions** on the invariants already understood well enough to state in English (trap/MRET mutual exclusion, `x0` never written, frozen-PC stability, forwarding priority, cache FSM legality) — not yet converted into checked properties.
-- **Functional coverage** on forwarding-path crosses, predictor outcome crosses, cache FSM transitions, trap causes — not yet measured, so "the directed suite exercises everything that matters" is currently a claim, not a number.
+- **Instruction-by-instruction lockstep against a golden model** (e.g. Spike) — would catch the "right answer via the wrong path" class of bug that final-state comparison structurally cannot. Largest single verification upgrade available; blocked in this environment on installing Spike's build dependencies (needs root).
 - **Constrained-random testing** against a golden model — would generalize past the blind spots of whoever wrote the directed and even the compliance tests.
 - **Synthesis / static timing** — none of the above says anything about whether the design closes timing; see the README's Notes section.

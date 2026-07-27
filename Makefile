@@ -26,7 +26,7 @@ GPARAMS  = -GIMEM_LATENCY=$(IMEM_LAT) -GDMEM_LATENCY=$(DMEM_LAT) \
            -GDCACHE_BYTES=$(DC_BYTES) -GDCACHE_BLOCK_WORDS=$(DC_BLOCK) -GDCACHE_WAYS=$(DC_WAYS) \
            -GDCACHE_WRITE_BACK=$(DC_WB)
 
-VFLAGS   = --cc --exe --build --trace -j 0
+VFLAGS   = --cc --exe --build --trace --assert --timing -j 0
 # The all-defaults config keeps the plain "obj_dir" name other scripts (e.g.
 # bench/run_bench.sh) already expect; any non-default config gets its own dir
 # so configs don't clobber each other's cached build.
@@ -41,7 +41,7 @@ ASM      = python3 tools/asm.py
 TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
-.PHONY: all sim assemble test memtiming bench lint wave clean
+.PHONY: all sim assemble test memtiming bench lint wave clean coverage
 
 # Default: build, assemble, run the full suite.
 all: sim assemble test
@@ -99,5 +99,26 @@ wave: sim assemble
 	         +VCD=tests/$(TEST).vcd
 	gtkwave tests/$(TEST).vcd &
 
+# Functional coverage: build with --coverage against a cache-enabled config
+# (so the D-cache FSM points are reachable), run the directed suite, merge
+# and annotate. Report: docs/coverage.md.
+COVDIR = obj_dir_cov
+coverage: assemble
+	verilator --cc --exe --build --trace --assert --timing --coverage \
+	    -GIMEM_LATENCY=10 -GDMEM_LATENCY=10 \
+	    -GICACHE_BYTES=1024 -GICACHE_BLOCK_WORDS=4 -GICACHE_WAYS=4 \
+	    -GDCACHE_BYTES=4096 -GDCACHE_BLOCK_WORDS=4 -GDCACHE_WAYS=4 -GDCACHE_WRITE_BACK=1 \
+	    --Mdir $(COVDIR) --top-module $(TOP) $(CPU_SRCS) $(TB)
+	@rm -rf coverage && mkdir -p coverage
+	@for t in $(TESTS); do \
+	    CYCS=$$(grep '^cycles=' tests/$$t.ref 2>/dev/null | cut -d= -f2); CYCS=$${CYCS:-25}; \
+	    ./$(COVDIR)/V$(TOP) +MEMFILE=tests/$$t.hex +REFFILE=tests/$$t.ref \
+	        +CYCLES=$$CYCS +VCD= +COVERAGE=coverage/$$t.dat > /dev/null; \
+	done
+	verilator_coverage --write coverage/merged.dat coverage/*.dat
+	verilator_coverage --annotate coverage/annotated coverage/merged.dat
+	python3 tools/coverage_report.py coverage/merged.dat > docs/coverage.md
+	@echo "wrote docs/coverage.md"
+
 clean:
-	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming tests/*.hex tests/*.vcd cpu.vcd
+	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming obj_dir_cov coverage tests/*.hex tests/*.vcd cpu.vcd

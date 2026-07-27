@@ -50,7 +50,7 @@ else
     newest=$(ls -t "$ROOT"/rtl/*.sv "$ROOT/cpu_tb.cpp" | head -1)
     if [ ! -x "$SIM" ] || [ "$newest" -nt "$SIM" ]; then
         echo "building simulator: latency=$LATENCY ic=${IC_BYTES}B dc=${DC_BYTES}B ..." >&2
-        verilator --cc --exe --build --trace -j 0 --top-module cpu \
+        verilator --cc --exe --build --trace --assert --timing -j 0 --top-module cpu \
             -GIMEM_LATENCY="$LATENCY" -GDMEM_LATENCY="$LATENCY" \
             -GICACHE_BYTES="$IC_BYTES" -GICACHE_BLOCK_WORDS="$IC_BLOCK" \
             -GICACHE_WAYS="$IC_WAYS" \
