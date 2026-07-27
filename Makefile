@@ -1,4 +1,4 @@
-# ---- RV32I single-cycle CPU: Verilator build + multi-test suite ----
+# ---- RV32I 5-stage pipelined CPU: Verilator build + multi-test suite ----
 TOP      = cpu
 TB       = cpu_tb.cpp
 
