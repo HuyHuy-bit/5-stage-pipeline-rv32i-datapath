@@ -61,14 +61,19 @@ int main(int argc, char** argv) {
 
     const std::unique_ptr<Vcpu> top{new Vcpu{ctx.get()}};
 
-    ctx->traceEverOn(true);
-    VerilatedVcdC* tfp = new VerilatedVcdC;
-    top->trace(tfp, 99);
-    tfp->open(vcdfile.c_str());
+    // +VCD= (empty) disables tracing entirely. Benchmarks run for millions of
+    // cycles; dumping every one of them produces gigabytes nobody opens.
+    VerilatedVcdC* tfp = nullptr;
+    if (!vcdfile.empty()) {
+        ctx->traceEverOn(true);
+        tfp = new VerilatedVcdC;
+        top->trace(tfp, 99);
+        tfp->open(vcdfile.c_str());
+    }
 
     auto tick = [&]() {
-        top->clk = 0; top->eval(); ctx->timeInc(1); tfp->dump(ctx->time());
-        top->clk = 1; top->eval(); ctx->timeInc(1); tfp->dump(ctx->time());
+        top->clk = 0; top->eval(); ctx->timeInc(1); if (tfp) tfp->dump(ctx->time());
+        top->clk = 1; top->eval(); ctx->timeInc(1); if (tfp) tfp->dump(ctx->time());
     };
 
     top->rst = 1; tick(); top->rst = 0;
@@ -89,7 +94,7 @@ int main(int argc, char** argv) {
         prev_pc = cur_pc;
     }
 
-    tfp->close();
+    if (tfp) tfp->close();
 
     std::string sigfile = strarg(argc, argv, "+SIGFILE=", "");
     if (!sigfile.empty()) {
