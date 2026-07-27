@@ -79,12 +79,22 @@ int main(int argc, char** argv) {
     top->rst = 1; tick(); top->rst = 0;
 
     const int timeout = (cycles > 0 ? cycles : 20) * 50 + 1000;
-    uint32_t prev_pc = 0xFFFFFFFF;
+    uint32_t prev_pc       = 0xFFFFFFFF;
+    uint32_t prev_memstall = 0;
     int      same_pc = 0;
     int      ran     = 0;
     for (int i = 0; i < timeout; i++) {
         tick();
         ran++;
+
+        // A frozen pipeline holds the PC by design, so a memory stall looks
+        // exactly like a self-loop. Only judge forward progress on cycles the
+        // pipeline actually advanced, or a slow memory ends the run instantly.
+        uint32_t cur_memstall = top->perf_mem_stall_count;
+        bool     stalled      = (cur_memstall != prev_memstall);
+        prev_memstall = cur_memstall;
+        if (stalled) continue;
+
         uint32_t cur_pc = top->rootp->cpu__DOT__pc_out;
         if (cur_pc == prev_pc) {
             if (++same_pc >= 6) break;   // parked in a self-loop
@@ -147,12 +157,14 @@ int main(int argc, char** argv) {
     uint32_t flushes  = top->perf_flush_count;
     uint32_t mispred  = top->perf_mispredict_count;
     uint32_t branches = top->perf_branch_count;
+    uint32_t memstall = top->perf_mem_stall_count;
     double   cpi      = instret ? (double)cyc / (double)instret : 0.0;
     double   acc      = branches ? 100.0 * (double)(branches - mispred) / (double)branches : 0.0;
     std::cout << "  perf: cycles=" << cyc
               << " instret=" << instret
               << " stalls=" << stalls
               << " flushes=" << flushes
+              << " memstall=" << memstall
               << " CPI=" << cpi << "\n";
     std::cout << "  bpred: branches=" << branches
               << " mispredicts=" << mispred
