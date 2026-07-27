@@ -1,5 +1,7 @@
 obj_dir/
+obj_dir_L*/
 *.vcd
-tests/*.hex"compliance/*.elf
+tests/*.hex
+compliance/*.elf
 compliance/*.hex
 compliance/*.sig.output
