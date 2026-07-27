@@ -1,0 +1,12 @@
+{
+  "signal": [
+    { "name": "clk",  "wave": "p......." },
+    { "name": "IF",   "wave": "x3455677", "data": ["beq","T+1","T+2","correct","."] },
+    { "name": "ID",   "wave": "x.3455*7", "data": ["beq","T+1","T+2","(squash)","correct"] },
+    { "name": "EX",   "wave": "x..34x*7", "data": ["beq","T+1","(squash)","correct"] },
+    { "name": "MEM",  "wave": "x...3xx4", "data": ["beq","."] },
+    { "name": "ex_flush", "wave": "0..10..." }
+  ],
+  "head": { "text": "Mispredict recovery: branch resolves in EX, IF/ID and ID/EX squashed (2-cycle penalty), redirect to correct_next_pc" },
+  "config": { "hscale": 1.3 }
+}

@@ -1,12 +1,14 @@
 # RV32I Pipelined CPU
 
-A 5-stage pipelined RISC-V (RV32I) processor, written in SystemVerilog and verified against the official RISC-V architectural compliance suite.
+A 5-stage pipelined RISC-V (RV32I) processor, written in SystemVerilog and verified against the official RISC-V architectural compliance suite. Every cycle, up to five instructions are in flight through **IF → ID → EX → MEM → WB**, with forwarding, branch prediction, precise exceptions, and a parameterised instruction/data cache hierarchy — measured, not just claimed, in the tables below.
 
 [![RTL Tests](https://github.com/HuyHuy-bit/rv32i-pipeline/actions/workflows/rtl-tests.yml/badge.svg)](https://github.com/HuyHuy-bit/rv32i-pipeline/actions/workflows/rtl-tests.yml)
 
-## What it does
+## Datapath
 
-Every cycle, up to five instructions are in flight at once, moving through **IF → ID → EX → MEM → WB**. The core implements the full RV32I base instruction set plus enough of the privileged spec to handle exceptions correctly:
+![Datapath block diagram](docs/datapath.svg)
+
+Five stages, four pipeline registers, both forwarding paths, the load-use stall path, the EX-stage mispredict redirect, the MEM-stage trap redirect, and the next-PC priority mux (`freeze > trap > mispredict > load-use stall > predict > +4`).
 
 - **Pipelining** — pipeline registers between every stage, with forwarding (EX/MEM and MEM/WB → EX) resolving most data hazards for free, and a hazard-detection unit stalling the one case forwarding can't fix (load-use).
 - **Branch prediction** — a 64-entry BTB paired with 2-bit saturating counters (Smith 1982), predicting taken branches in the fetch stage and redirecting speculatively. Correctly-predicted taken branches cost zero cycles instead of the usual 2-cycle flush penalty; measured 80%+ accuracy on loop-heavy code.
@@ -14,11 +16,54 @@ Every cycle, up to five instructions are in flight at once, moving through **IF 
 - **Memory hierarchy** — a parameterised instruction cache and data cache in front of a backing memory with configurable access latency. The D-cache supports write-through/no-allocate and write-back/write-allocate as a build-time choice, so the two can be measured against each other rather than argued about. Both caches sweep on capacity, block size, and associativity.
 - **Performance counters** — cycle count, instructions retired, stall/flush counts, memory-stall cycles, branch-predictor accuracy, and per-cache access/miss counts, all exposed live so the pipeline's behavior is measurable, not just "it passes."
 
+Pipeline timing (WaveDrom source in [`docs/`](docs/), rendered to SVG):
+
+| Load-use stall | Mispredict recovery | Trap at MEM commit |
+|---|---|---|
+| ![Load-use stall](docs/timing_load_use.svg) | ![Mispredict recovery](docs/timing_mispredict.svg) | ![Trap commit](docs/timing_trap.svg) |
+
+## Performance
+
+Five C kernels, compiled with the same toolchain the compliance suite uses. Nothing is hand-checked: each kernel is also compiled for the host and run there, and the CPU's result is compared against that, so a wrong answer fails the run rather than quietly skewing a number.
+
+`crc32` is a tight bitwise loop, `matmul` a 16x16 integer multiply, `sort` a data-dependent bubble sort, `llist` a deliberately cache-hostile scattered pointer chase, and `interp` a stack-machine interpreter whose dispatch chain gives the I-cache a real instruction footprint to miss on.
+
+CPI against a 10-cycle backing memory:
+
+| kernel | no caches | +1KB I-cache | +4KB write-back D-cache | ideal 1-cycle memory |
+|---|---|---|---|---|
+| crc32  | 11.36 | 1.51 | **1.18** | 1.17 |
+| matmul | 11.39 | 1.47 | **1.18** | 1.18 |
+| sort   | 12.48 | 4.22 | **1.25** | 1.25 |
+| llist  | 10.00 | 4.36 | **1.03** | 1.00 |
+| interp | 11.88 | 2.60 | **1.19** | 1.19 |
+
+The last column is the same core with a one-cycle memory — a machine that can never stall on an access. The cached configuration lands within 0.1–3% of it while actually paying 10 cycles per backing-memory access, so the hierarchy recovers essentially the whole latency penalty.
+
+Three results from the sweeps that are worth more than the headline:
+
+**Bigger blocks are not better blocks.** On `interp` with a 512B I-cache, sweeping block size inverts the two metrics against each other: 8-word blocks give the highest hit rate (96.8%) and the *worst* CPI (3.48), while 1-word blocks give the lowest hit rate (93.3%) and the *best* CPI (3.02). Refill cost outruns the locality it buys, and a cache tuned on hit rate alone would have picked the slowest configuration on the board. Measuring this at all requires the backing memory to model burst transfers (see the memory-hierarchy diagram below); charge full latency per word and every block size above one loses for a reason that is an artifact of the model rather than a property of caches.
+
+**Write-back is not a free upgrade.** It wins big where stores dominate — `sort` goes 2.25 to 1.25 CPI at 1KB — but *loses* to write-through on `matmul` at 256B and 1KB (1.54 vs 1.48, 1.32 vs 1.26). Write-allocate fetches a block before overwriting it, which is wasted work for a kernel that streams writes into memory it never reads back. The two policies cross over at 4KB.
+
+**The hostile kernel behaves hostilely, until it doesn't.** `llist` chases 4KB of scattered pointers. With 1-word blocks it hits 0.17% of the time — the control case confirming the cache isn't quietly succeeding for the wrong reason. With 4-word blocks it reaches 74%, and at 4KB, where the pool finally fits, 99.3%. Non-monotonic in block size too: 8-word blocks are *worse* than 4-word (62.8% vs 74.2%), because a fixed capacity split into fewer, larger blocks thrashes harder on a scattered access pattern.
+
 ## Verification
 
 - **11 hand-written directed tests** covering every instruction class, plus specific hazard, prediction, and exception-round-trip scenarios (each one written to catch a specific failure mode, not just exercise the happy path).
 - **The official RISC-V `riscv-arch-test` compliance suite** (`rv32i_m/I`, base integer): **38/38 passing**, each result diffed word-for-word against the golden reference signature.
-- CI runs the full directed-test suite on every push, and the compliance sweep whenever the RTL changes.
+- **CI matrix**: the full directed suite runs across 6 cache/latency configurations on every push (baseline, slow memory, I-cache only, write-through D$, write-back D$, 2-way associative) — 66 test executions, all required to agree, because the architectural result must be invariant to cache configuration. The compliance sweep runs whenever the RTL changes.
+- `make lint` is clean under `verilator --lint-only -Wall`, with every waiver in [`rtl/verilator.vlt`](rtl/verilator.vlt) carrying a one-line justification.
+
+See [`docs/VERIFICATION_PLAN.md`](docs/VERIFICATION_PLAN.md) for what's tested, by what mechanism, and what's explicitly not tested yet.
+
+## Memory hierarchy
+
+![Memory hierarchy](docs/mem_hierarchy.svg)
+
+`lsu` handles subword alignment, `dcache` holds the write-through/write-back policy, and `mem_timing` is the access-cost model that every CPI number in the performance table is scaled by — it's what makes the burst-refill discount (and therefore the block-size sweep above) mean anything.
+
+![D-cache FSM](docs/cache_fsm.svg)
 
 ## Architecture
 
@@ -47,53 +92,24 @@ make all     # build the simulator, run all directed tests
 make bench   # run the C benchmark kernels, print a CPI table
 ```
 
+Cache and latency settings are RTL parameters, so each configuration is its own simulator build (see `make all IC_BYTES=... DC_BYTES=... DC_WB=... IMEM_LAT=... DMEM_LAT=...`, or the CI matrix in [`.github/workflows/rtl-tests.yml`](.github/workflows/rtl-tests.yml) for the exact combinations exercised):
+
 ```bash
-cd compliance && ./run_compliance.sh
+make all IC_BYTES=1024 IC_WAYS=4 DC_BYTES=4096 DC_WAYS=4 DC_WB=1 IMEM_LAT=10 DMEM_LAT=10
 ```
 
-Cache and latency settings are RTL parameters, so each configuration is its own simulator build. The benchmark runner handles that and caches builds per configuration:
+```bash
+ARCH_TEST=~/riscv-arch-test compliance/run_compliance.sh   # defaults to $HOME/riscv-arch-test
+```
+
+The benchmark runner and sweep scripts use the same parameters and cache builds per configuration:
 
 ```bash
 ./bench/run_bench.sh 10 1024 4 1
-```
-
-```bash
 DC_BYTES=4096 DC_WB=1 ./bench/run_bench.sh 10 1024 4 1
-```
-
-```bash
 ./bench/sweep.sh 10
-```
-
-```bash
 ./bench/sweep_dcache.sh 10
 ```
-
-## Performance
-
-Five C kernels, compiled with the same toolchain the compliance suite uses. Nothing is hand-checked: each kernel is also compiled for the host and run there, and the CPU's result is compared against that, so a wrong answer fails the run rather than quietly skewing a number.
-
-`crc32` is a tight bitwise loop, `matmul` a 16x16 integer multiply, `sort` a data-dependent bubble sort, `llist` a deliberately cache-hostile scattered pointer chase, and `interp` a stack-machine interpreter whose dispatch chain gives the I-cache a real instruction footprint to miss on.
-
-CPI against a 10-cycle backing memory:
-
-| kernel | no caches | +1KB I-cache | +4KB write-back D-cache | ideal 1-cycle memory |
-|---|---|---|---|---|
-| crc32  | 11.36 | 1.51 | **1.18** | 1.17 |
-| matmul | 11.39 | 1.47 | **1.18** | 1.18 |
-| sort   | 12.48 | 4.22 | **1.25** | 1.25 |
-| llist  | 10.00 | 4.36 | **1.03** | 1.00 |
-| interp | 11.88 | 2.60 | **1.19** | 1.19 |
-
-The last column is the same core with a one-cycle memory — a machine that can never stall on an access. The cached configuration lands within 0.1–3% of it while actually paying 10 cycles per backing-memory access, so the hierarchy recovers essentially the whole latency penalty.
-
-Three results from the sweeps that are worth more than the headline:
-
-**Bigger blocks are not better blocks.** On `interp` with a 512B I-cache, sweeping block size inverts the two metrics against each other: 8-word blocks give the highest hit rate (96.8%) and the *worst* CPI (3.48), while 1-word blocks give the lowest hit rate (93.3%) and the *best* CPI (3.02). Refill cost outruns the locality it buys, and a cache tuned on hit rate alone would have picked the slowest configuration on the board. Measuring this at all requires the backing memory to model burst transfers; charge full latency per word and every block size above one loses for a reason that is an artifact of the model rather than a property of caches.
-
-**Write-back is not a free upgrade.** It wins big where stores dominate — `sort` goes 2.25 to 1.25 CPI at 1KB — but *loses* to write-through on `matmul` at 256B and 1KB (1.54 vs 1.48, 1.32 vs 1.26). Write-allocate fetches a block before overwriting it, which is wasted work for a kernel that streams writes into memory it never reads back. The two policies cross over at 4KB.
-
-**The hostile kernel behaves hostilely, until it doesn't.** `llist` chases 4KB of scattered pointers. With 1-word blocks it hits 0.17% of the time — the control case confirming the cache isn't quietly succeeding for the wrong reason. With 4-word blocks it reaches 74%, and at 4KB, where the pool finally fits, 99.3%. Non-monotonic in block size too: 8-word blocks are *worse* than 4-word (62.8% vs 74.2%), because a fixed capacity split into fewer, larger blocks thrashes harder on a scattered access pattern.
 
 ## What I learned
 

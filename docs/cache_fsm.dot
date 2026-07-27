@@ -1,0 +1,26 @@
+digraph cache_fsm {
+    rankdir=LR;
+    graph [fontname="Helvetica", fontsize=11, bgcolor="white"];
+    node  [fontname="Helvetica", fontsize=10, shape=circle, style=filled, fillcolor="#eef2ff", color="#4338ca", width=1.1];
+    edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+    IDLE [fillcolor="#dcfce7", color="#15803d"];
+    WB   [label="WB\n(write back\ndirty victim)"];
+    FILL [label="FILL\n(refill line\nfrom memory)"];
+    FLUSH[label="FLUSH\n(walk all sets,\nwrite back dirty)"];
+
+    IDLE -> FILL  [label="miss, line clean\n(load, or store\nwrite-allocate)"];
+    IDLE -> WB    [label="miss, victim dirty\n(write-back only)"];
+    IDLE -> FLUSH [label="flush_req"];
+    WB   -> FILL  [label="writeback done,\nmiss-driven"];
+    WB   -> FLUSH [label="writeback done,\nflush-driven"];
+    FILL -> IDLE  [label="block complete\n(claim line)"];
+    FLUSH -> WB   [label="dirty line found"];
+    FLUSH -> FLUSH [label="advance way/set"];
+    FLUSH -> IDLE [label="all sets walked\n(flush_complete)"];
+    IDLE -> IDLE  [label="hit (write-through:\nmerge resident copy;\nwrite-back: mark dirty)"];
+
+    label = "D-cache FSM (dcache.sv) — write-through skips WB (WRITE_BACK=0 never sets a victim dirty)";
+    labelloc = "b";
+    fontsize = 10;
+}
