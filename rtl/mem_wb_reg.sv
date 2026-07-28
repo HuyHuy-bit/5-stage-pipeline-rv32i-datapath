@@ -2,27 +2,27 @@
 
 // mem_wb_reg.sv - latches load data + ALU result + control into the WB stage.
 module mem_wb_reg (
-    input  logic        clk,
-    input  logic        rst,
-    input  logic        freeze,  // hold contents (memory stall)
+    input  var logic        clk,
+    input  var logic        rst,
+    input  var logic        freeze,  // hold contents (memory stall)
 
-    input  logic [31:0] mem_read_data_in,
-    input  logic [31:0] alu_result_in,
-    input  logic [31:0] pc_plus4_in,
-    input  logic [4:0]  rd_addr_in,
+    input  var logic [31:0] mem_read_data_in,
+    input  var logic [31:0] alu_result_in,
+    input  var logic [31:0] pc_plus4_in,
+    input  var logic [4:0]  rd_addr_in,
 
-    input  logic        reg_write_en_in,
-    input  logic [1:0]  wb_src_in,
-    input  logic        valid_in,
+    input  var logic        reg_write_en_in,
+    input  var logic [1:0]  wb_src_in,
+    input  var logic        valid_in,
 
-    output logic [31:0] mem_read_data_out,
-    output logic [31:0] alu_result_out,
-    output logic [31:0] pc_plus4_out,
-    output logic [4:0]  rd_addr_out,
+    output var logic [31:0] mem_read_data_out,
+    output var logic [31:0] alu_result_out,
+    output var logic [31:0] pc_plus4_out,
+    output var logic [4:0]  rd_addr_out,
 
-    output logic        reg_write_en_out,
-    output logic [1:0]  wb_src_out,
-    output logic        valid_out
+    output var logic        reg_write_en_out,
+    output var logic [1:0]  wb_src_out,
+    output var logic        valid_out
 );
     always_ff @(posedge clk) begin
         if (rst) begin

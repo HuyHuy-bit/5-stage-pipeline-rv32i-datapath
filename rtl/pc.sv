@@ -1,10 +1,10 @@
 `default_nettype none
  
 module pc (
-    input  logic        clk,
-    input  logic        rst,
-    input  logic [31:0] next_pc,    // the address to use next cycle
-    output logic [31:0] pc_out      // the current instruction address
+    input  var logic        clk,
+    input  var logic        rst,
+    input  var logic [31:0] next_pc,    // the address to use next cycle
+    output var logic [31:0] pc_out      // the current instruction address
 );
  
     always_ff @(posedge clk) begin

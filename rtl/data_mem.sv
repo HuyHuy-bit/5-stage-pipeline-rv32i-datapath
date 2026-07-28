@@ -8,27 +8,33 @@ module data_mem #(
     parameter int LATENCY     = 1,
     parameter int DEPTH_WORDS = 16384
 ) (
-    input  logic        clk,
-    input  logic        rst,
-    input  logic        req,          // this cycle genuinely presents an access
-    input  logic        burst,        // requester is walking sequential words
-    input  logic [31:0] addr,         // byte address
-    input  logic [3:0]  byte_en,      // lanes to write (0 = this is a read)
-    input  logic [31:0] write_word,   // already shifted into its lane
-    output logic [31:0] read_word,
-    output logic        ready
+    input  var logic        clk,
+    input  var logic        rst,
+    input  var logic        req,          // this cycle genuinely presents an access
+    input  var logic        burst,        // requester is walking sequential words
+    input  var logic [31:0] addr,         // byte address
+    input  var logic [3:0]  byte_en,      // lanes to write (0 = this is a read)
+    input  var logic [31:0] write_word,   // already shifted into its lane
+    output var logic [31:0] read_word,
+    output var logic        ready
 );
     localparam int WORDW = $clog2(DEPTH_WORDS);
 
     // Word-addressed array; subword access handled via per-byte write strobes.
     logic [31:0] mem_array [0:DEPTH_WORDS-1];
 
+`ifndef SYNTHESIS
     string data_file;
     initial begin
         if ($value$plusargs("DATAFILE=%s", data_file)) begin
             $readmemh(data_file, mem_array);
         end
     end
+`else
+    // See the matching comment in instr_mem.sv: content is irrelevant for
+    // resource/timing analysis, this just gives synthesis a BRAM to infer.
+    initial $readmemh("blank_data.hex", mem_array);
+`endif
 
     // Only the low bits are decoded; bits above them are deliberately
     // ignored, not validated. The linker script places RAM at 0x00300000

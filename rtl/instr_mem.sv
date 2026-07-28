@@ -20,14 +20,22 @@ module instr_mem #(
     localparam int WORDW = $clog2(DEPTH_WORDS);
 
     logic [31:0] mem [0:DEPTH_WORDS-1];
-    string mem_file;
 
+`ifndef SYNTHESIS
+    string mem_file;
     initial begin
         if (!$value$plusargs("MEMFILE=%s", mem_file)) begin
             $fatal(1, "instr_mem: no +MEMFILE=<hexfile> supplied");
         end
         $readmemh(mem_file, mem);
     end
+`else
+    // $value$plusargs/$fatal are simulation-only; synthesis just needs *a*
+    // BRAM-inferring initial load, since resource/timing numbers don't
+    // depend on content. A real design would load code via a bootloader or
+    // a MIF/COE-driven init instead of $readmemh.
+    initial $readmemh("blank_instr.hex", mem);
+`endif
 
     // Only the low bits are decoded; see the matching comment in data_mem.sv
     // — this aliasing is relied on by the linker script, not a bug.
