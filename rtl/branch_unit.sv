@@ -3,11 +3,11 @@
 import rv32i_pkg::*;
 
 module branch_unit (
-    input logic [31:0] rs1,
-    input logic [31:0] rs2,
-    input logic [2:0] funct3,
-    input logic branch,
-    output logic pc_sel
+    input var logic [31:0] rs1,
+    input var logic [31:0] rs2,
+    input var logic [2:0] funct3,
+    input var logic branch,
+    output var logic pc_sel
 );
     logic branch_taken;
     always_comb begin

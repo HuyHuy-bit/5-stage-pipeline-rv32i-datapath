@@ -13,26 +13,32 @@ module cpu #(
     parameter int DCACHE_BYTES       = 0,
     parameter int DCACHE_BLOCK_WORDS = 4,
     parameter int DCACHE_WAYS        = 1,
-    parameter int DCACHE_WRITE_BACK  = 0
+    parameter int DCACHE_WRITE_BACK  = 0,
+    // Backing-memory depth. Defaults match the pre-parameterization sizes
+    // (2MB instruction ROM, 64KB data RAM) so simulation is unaffected;
+    // synthesis overrides these to fit a target device's BRAM budget - see
+    // syn/build.tcl.
+    parameter int IMEM_DEPTH_WORDS   = 524288,
+    parameter int DMEM_DEPTH_WORDS   = 16384
 ) (
-    input  logic clk,
-    input  logic rst,
-    output logic [31:0] perf_cycle_count,
-    output logic [31:0] perf_instr_retired,
-    output logic [31:0] perf_stall_count,
-    output logic [31:0] perf_flush_count,
-    output logic [31:0] perf_mispredict_count,
-    output logic [31:0] perf_branch_count,
-    output logic [31:0] perf_mem_stall_count,
-    output logic [31:0] perf_icache_access,
-    output logic [31:0] perf_icache_miss,
-    output logic [31:0] perf_dcache_access,
-    output logic [31:0] perf_dcache_miss,
+    input  var logic clk,
+    input  var logic rst,
+    output var logic [31:0] perf_cycle_count,
+    output var logic [31:0] perf_instr_retired,
+    output var logic [31:0] perf_stall_count,
+    output var logic [31:0] perf_flush_count,
+    output var logic [31:0] perf_mispredict_count,
+    output var logic [31:0] perf_branch_count,
+    output var logic [31:0] perf_mem_stall_count,
+    output var logic [31:0] perf_icache_access,
+    output var logic [31:0] perf_icache_miss,
+    output var logic [31:0] perf_dcache_access,
+    output var logic [31:0] perf_dcache_miss,
     // Debug: drive high to write every dirty D-cache line back to memory, and
     // wait for dbg_flush_done. Only meaningful for a write-back D-cache, where
     // memory on its own no longer holds all of architectural state.
-    input  logic        dbg_flush,
-    output logic        dbg_flush_done
+    input  var logic        dbg_flush,
+    output var logic        dbg_flush_done
 );
 
     // IF stage
@@ -79,7 +85,7 @@ module cpu #(
         );
     end
 
-    instr_mem #(.LATENCY(IMEM_LATENCY)) u_instr_mem (
+    instr_mem #(.LATENCY(IMEM_LATENCY), .DEPTH_WORDS(IMEM_DEPTH_WORDS)) u_instr_mem (
         .clk(clk), .rst(rst),
         .req(ic_mem_req), .burst(ic_mem_burst),
         .addr(ic_mem_addr), .instr(ic_mem_instr), .ready(ic_mem_ready)
@@ -518,7 +524,7 @@ module cpu #(
         );
     end
 
-    data_mem #(.LATENCY(DMEM_LATENCY)) u_data_mem (
+    data_mem #(.LATENCY(DMEM_LATENCY), .DEPTH_WORDS(DMEM_DEPTH_WORDS)) u_data_mem (
         .clk(clk), .rst(rst),
         .req(dc_mem_req), .burst(dc_mem_burst),
         .addr(dc_mem_addr),
@@ -702,6 +708,9 @@ module cpu #(
     // ---- Design invariants, checked every cycle of every test ----
     // Each property below is an invariant already explained in a comment
     // elsewhere in this file; this is that same reasoning made falsifiable.
+    // Simulation-only: SVA isn't synthesized, and not every tool ignores it
+    // silently the way Verilator's --lint-only does.
+`ifndef SYNTHESIS
 
     // -- control-flow / redirect --
     a_trap_mret_excl: assert property (@(posedge clk) disable iff (rst)
@@ -740,6 +749,7 @@ module cpu #(
         rs1_addr_ex == 5'd0 |-> forward_a == 2'b00);
     a_fwd_b_no_x0: assert property (@(posedge clk) disable iff (rst)
         rs2_addr_ex == 5'd0 |-> forward_b == 2'b00);
+`endif // SYNTHESIS
 
     // ---- Functional coverage ----
     // SystemVerilog covergroups aren't supported by this toolchain (COVERIGN);

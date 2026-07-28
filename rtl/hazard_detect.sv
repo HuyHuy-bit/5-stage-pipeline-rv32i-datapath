@@ -1,13 +1,13 @@
 `default_nettype none
 
 module hazard_detect (
-    input  logic       mem_read_ex,   // instruction currently in EX is a load
-    input  logic [4:0] rd_addr_ex,    // its destination register
+    input  var logic       mem_read_ex,   // instruction currently in EX is a load
+    input  var logic [4:0] rd_addr_ex,    // its destination register
 
-    input  logic [4:0] rs1_addr_id,   // instruction currently in ID's operands
-    input  logic [4:0] rs2_addr_id,
+    input  var logic [4:0] rs1_addr_id,   // instruction currently in ID's operands
+    input  var logic [4:0] rs2_addr_id,
 
-    output logic       stall          // 1 = insert one bubble
+    output var logic       stall          // 1 = insert one bubble
 );
     always_comb begin
         stall = mem_read_ex &&

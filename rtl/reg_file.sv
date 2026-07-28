@@ -1,15 +1,15 @@
 `default_nettype none
 
 module reg_file (
-    input  logic        clk,
-    input  logic        rst,
-    input  logic [4:0]  rs1_addr,     // source register 1 number
-    input  logic [4:0]  rs2_addr,     // source register 2 number
-    input  logic [4:0]  rd_addr,      // destination register number
-    input  logic [31:0] rd_data,      // data to write to rd
-    input  logic        rd_write_en,  // write enable
-    output logic [31:0] rs1_data,     // value read from rs1
-    output logic [31:0] rs2_data      // value read from rs2
+    input  var logic        clk,
+    input  var logic        rst,
+    input  var logic [4:0]  rs1_addr,     // source register 1 number
+    input  var logic [4:0]  rs2_addr,     // source register 2 number
+    input  var logic [4:0]  rd_addr,      // destination register number
+    input  var logic [31:0] rd_data,      // data to write to rd
+    input  var logic        rd_write_en,  // write enable
+    output var logic [31:0] rs1_data,     // value read from rs1
+    output var logic [31:0] rs2_data      // value read from rs2
 );
     logic [31:0] reg_array [0:31];
 
@@ -39,12 +39,14 @@ module reg_file (
         end
     end
 
+`ifndef SYNTHESIS
     // x0 is hardwired to zero; the write path above already guards on
     // rd_addr != 0, so this checks the guard actually holds rather than the
     // (weaker, and sometimes-true) claim that rd_write_en never fires at
     // rd_addr==0 — a NOP encoded as "addi x0, x0, 0" does exactly that.
     a_x0_never_written: assert property (@(posedge clk) disable iff (rst)
         $stable(reg_array[0]));
+`endif
 endmodule
 
 `default_nettype wire

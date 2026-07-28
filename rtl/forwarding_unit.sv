@@ -3,17 +3,17 @@
 // forwarding_unit.sv - decides whether the EX stage's rs1/rs2 operands should
 // come from the register file (via ID/EX) or be bypassed from a later stage.
 module forwarding_unit (
-    input  logic [4:0] rs1_addr_ex,
-    input  logic [4:0] rs2_addr_ex,
+    input  var logic [4:0] rs1_addr_ex,
+    input  var logic [4:0] rs2_addr_ex,
 
-    input  logic [4:0] rd_addr_mem,
-    input  logic       reg_write_en_mem,
+    input  var logic [4:0] rd_addr_mem,
+    input  var logic       reg_write_en_mem,
 
-    input  logic [4:0] rd_addr_wb,
-    input  logic       reg_write_en_wb,
+    input  var logic [4:0] rd_addr_wb,
+    input  var logic       reg_write_en_wb,
 
-    output logic [1:0] forward_a,   // 00 = no forward, 01 = from EX/MEM, 10 = from MEM/WB
-    output logic [1:0] forward_b
+    output var logic [1:0] forward_a,   // 00 = no forward, 01 = from EX/MEM, 10 = from MEM/WB
+    output var logic [1:0] forward_b
 );
     always_comb begin
         // --- operand A (rs1) ---
