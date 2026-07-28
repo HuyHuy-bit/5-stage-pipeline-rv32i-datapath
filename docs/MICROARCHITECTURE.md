@@ -2,11 +2,11 @@
 
 ## Overview and design goals
 
-A 5-stage in-order RV32I pipeline optimized for **measurable trade-offs over raw performance**: every major design choice below has a cheaper or faster alternative that was deliberately not taken, and the point of the project is to state what it cost. It is not optimized for area, power, or clock frequency — the caches in particular don't yet fit the target device (see Synthesis) — and it deliberately does not implement interrupts, `FENCE.I`, or any extension beyond base RV32I.
+A 5-stage in-order RV32I pipeline optimized for **measurable trade-offs over raw performance**: every major design choice below has a cheaper or faster alternative that was deliberately not taken, and the point of the project is to state what it cost. It is not optimized for area, power, or clock frequency (see Synthesis for what it does cost on a real device) — and it deliberately does not implement interrupts, `FENCE.I`, or any extension beyond base RV32I.
 
 ## Pipeline organization
 
-IF → ID → EX → MEM → WB, one instruction wide, in order. See the datapath diagram in the [README](../README.md#datapath) for the full block diagram, including both forwarding paths, the load-use stall path, and the next-PC priority mux.
+IF → ID → EX → MEM → WB, one instruction wide, in order. See the datapath diagram at the top of the [README](../README.md) for the full block diagram, including both forwarding paths, the load-use stall path, and the next-PC priority mux.
 
 - **IF**: PC → optional I-cache → `instr_mem`. Branch prediction (BTB + 2-bit counters) looks up in parallel with fetch and can redirect the *next* fetch speculatively.
 - **ID**: decode (`control.sv`), register read (`reg_file.sv`, with a same-cycle write/read bypass), immediate generation.
@@ -21,7 +21,7 @@ Every pipeline register carries a `valid` bit end-to-end, so a flushed bubble is
 Each entry: what was chosen, the alternative, what it costs, and the evidence.
 
 ### EX-resolve branches, not ID-resolve
-**Chosen:** branches and jumps resolve in EX. **Alternative:** resolve in ID, which would cut the mispredict penalty from 2 cycles to 1. **Cost:** an ID-stage comparator on what's likely close to the critical path already, plus a second forwarding network feeding it (EX/MEM and MEM/WB values would need to reach ID, not just EX). **Evidence:** not isolated — fmax numbers now exist (see Synthesis), but only for the design as structured; no ID-resolve variant was built to compare against, so the specific claim "an ID comparator would cost X MHz" remains an argument, not a measurement. The 2-cycle penalty itself is directly measured: `bpred: mispredicts=N` in every test's perf counters, and the branch-predictor accuracy figures in the README's Performance section (80%+ on loop-heavy code) are the reason it doesn't dominate.
+**Chosen:** branches and jumps resolve in EX. **Alternative:** resolve in ID, which would cut the mispredict penalty from 2 cycles to 1. **Cost:** an ID-stage comparator on what's likely close to the critical path already, plus a second forwarding network feeding it (EX/MEM and MEM/WB values would need to reach ID, not just EX). **Evidence:** not isolated — fmax numbers now exist (see Synthesis), but only for the design as structured; no ID-resolve variant was built to compare against, so the specific claim "an ID comparator would cost X MHz" remains an argument, not a measurement. The 2-cycle penalty itself is directly measured: `bpred: mispredicts=N` in every test's perf counters, and the predictor's measured accuracy (80%+ on loop-heavy code, reported per-run by the perf counters) is the reason it doesn't dominate.
 
 ### Global pipeline freeze, not a decoupled front end
 **Chosen:** any memory stall (`pipe_stall`) freezes the *entire* pipeline — PC, all four pipeline registers, the predictor, the CSR file, and the counters — for the cycle. **Alternative:** a fetch buffer between IF and ID would let the back end drain through an instruction-fetch miss instead of stalling on it. **Cost:** this is the single biggest structural limiter in the design (see `cpu.sv`'s `ponytail:` comment at the freeze mux). It inflates both the cached and uncached CPI numbers in the README's Performance section equally, so it doesn't fabricate a cache speedup, but it does mean the I-cache's measured benefit is somewhat inflated relative to what a decoupled front end would show — a D-cache miss currently stalls fetch too, which a real design would avoid. **Not implemented this pass**: a correct fetch-buffer redesign touches the freeze/flush/redirect priority logic this whole codebase's precise-exception and forwarding guarantees are built on, and validating it needs the lockstep golden model (blocked — see Limitations) as a regression net. Attempting it without one risks introducing exactly the kind of subtle pipeline bug the verification work in this pass was aimed at catching.
@@ -46,9 +46,15 @@ Each entry: what was chosen, the alternative, what it costs, and the evidence.
 
 ## Hazard and exception model
 
-- **Data hazards**: EX/MEM and MEM/WB forwarding cover same-register producer/consumer pairs at distance 1 and 2; load-use (distance-1 dependency on a load, which forwarding can't fix because the value doesn't exist yet at EX) is caught by `hazard_detect.sv` and resolved with a one-cycle stall. See the load-use timing diagram in the README.
-- **Control hazards**: predicted speculatively in IF; resolved in EX. A misprediction squashes IF/ID and ID/EX (the two younger in-flight instructions) — see the mispredict timing diagram in the README.
-- **Exceptions**: illegal instruction, misaligned load/store, misaligned fetch (taken branch/JAL to a non-4-byte-aligned target), `ECALL`/`EBREAK`, and illegal CSR access (unimplemented address, or a write to a structurally read-only one) are all detected in EX and committed at the MEM commit point — see the trap timing diagram in the README. `mepc`/`mcause`/`mtval` are set on entry; `MRET` restores `mepc` as the redirect target. There is no `mstatus.MIE`/`MPIE`/`MPP` stack — see Limitations.
+| Load-use stall | Mispredict recovery | Trap at MEM commit |
+|---|---|---|
+| ![Load-use stall](timing_load_use.svg) | ![Mispredict recovery](timing_mispredict.svg) | ![Trap commit](timing_trap.svg) |
+
+(WaveDrom sources alongside each SVG in this directory.)
+
+- **Data hazards**: EX/MEM and MEM/WB forwarding cover same-register producer/consumer pairs at distance 1 and 2; load-use (distance-1 dependency on a load, which forwarding can't fix because the value doesn't exist yet at EX) is caught by `hazard_detect.sv` and resolved with a one-cycle stall.
+- **Control hazards**: predicted speculatively in IF; resolved in EX. A misprediction squashes IF/ID and ID/EX (the two younger in-flight instructions).
+- **Exceptions**: illegal instruction, misaligned load/store, misaligned fetch (taken branch/JAL to a non-4-byte-aligned target), `ECALL`/`EBREAK`, and illegal CSR access (unimplemented address, or a write to a structurally read-only one) are all detected in EX and committed at the MEM commit point. `mepc`/`mcause`/`mtval` are set on entry; `MRET` restores `mepc` as the redirect target. There is no `mstatus.MIE`/`MPIE`/`MPP` stack — see Limitations.
 - **Priority** (next-PC mux, highest to lowest): memory-stall freeze > trap/MRET commit > EX misprediction recovery > load-use stall > front-end predicted-taken redirect > sequential.
 
 ## Memory hierarchy

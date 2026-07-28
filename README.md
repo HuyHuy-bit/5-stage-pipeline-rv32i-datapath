@@ -1,119 +1,93 @@
 # RV32I Pipelined CPU
 
-A 5-stage pipelined RISC-V (RV32I) processor, written in SystemVerilog and verified against the official RISC-V architectural compliance suite. Every cycle, up to five instructions are in flight through **IF → ID → EX → MEM → WB**, with forwarding, branch prediction, precise exceptions, and a parameterised instruction/data cache hierarchy — measured, not just claimed, in the tables below.
+A 5-stage pipelined RISC-V (RV32I) core in SystemVerilog — forwarding, branch prediction, precise exceptions, and a parameterised I/D cache hierarchy. Verified against the official RISC-V compliance suite, and synthesized to a real FPGA target so every performance claim has both a CPI number and an fmax number behind it.
 
 [![RTL Tests](https://github.com/HuyHuy-bit/rv32i-pipeline/actions/workflows/rtl-tests.yml/badge.svg)](https://github.com/HuyHuy-bit/rv32i-pipeline/actions/workflows/rtl-tests.yml)
 
-## Datapath
-
 ![Datapath block diagram](docs/datapath.svg)
 
-Five stages, four pipeline registers, both forwarding paths, the load-use stall path, the EX-stage mispredict redirect, the MEM-stage trap redirect, and the next-PC priority mux (`freeze > trap > mispredict > load-use stall > predict > +4`).
+Next-PC priority: `freeze > trap > mispredict > load-use stall > predict > +4`. Every pipeline register carries a `valid` bit end-to-end, so a flushed bubble is always distinguishable from a retired instruction — that's what makes the counters and precise exceptions exact rather than approximate.
 
-- **Pipelining** — pipeline registers between every stage, with forwarding (EX/MEM and MEM/WB → EX) resolving most data hazards for free, and a hazard-detection unit stalling the one case forwarding can't fix (load-use).
-- **Branch prediction** — a 64-entry BTB paired with 2-bit saturating counters (Smith 1982), predicting taken branches in the fetch stage and redirecting speculatively. Correctly-predicted taken branches cost zero cycles instead of the usual 2-cycle flush penalty; measured 80%+ accuracy on loop-heavy code.
-- **Precise exceptions** — a single commit point in the MEM stage resolves all traps, so an exception always leaves architectural state exactly as if every older instruction completed and every younger one never ran. Covers illegal instructions, misaligned loads/stores/fetches, `ECALL`/`EBREAK`, `MRET`, and illegal CSR access (unimplemented address, or a write to a read-only one), backed by an M-mode CSR file — `mtvec`/`mepc`/`mcause`/`mscratch`/`mtval`, the read-only ID CSRs (`misa`/`mvendorid`/`marchid`/`mimpid`/`mhartid`), and live `mcycle`/`minstret` counters.
-- **Memory hierarchy** — a parameterised instruction cache and data cache in front of a backing memory with configurable access latency. The D-cache supports write-through/no-allocate and write-back/write-allocate as a build-time choice, so the two can be measured against each other rather than argued about. Both caches sweep on capacity, block size, and associativity.
-- **Performance counters** — cycle count, instructions retired, stall/flush counts, memory-stall cycles, branch-predictor accuracy, and per-cache access/miss counts, all exposed live so the pipeline's behavior is measurable, not just "it passes."
+## Specification
 
-Pipeline timing (WaveDrom source in [`docs/`](docs/), rendered to SVG):
+| | |
+|---|---|
+| **ISA** | RV32I base integer, M-mode only |
+| **Pipeline** | 5-stage in-order (IF/ID/EX/MEM/WB), single issue |
+| **Hazards** | EX/MEM + MEM/WB forwarding; 1-cycle stall on load-use |
+| **Branch prediction** | 64-entry BTB + 2-bit saturating counters, resolved in EX (2-cycle penalty) |
+| **Exceptions** | Precise, single commit point in MEM. Illegal instruction, misaligned load/store/fetch, `ECALL`/`EBREAK`, `MRET`, illegal CSR access |
+| **CSRs** | `mtvec` `mepc` `mcause` `mscratch` `mtval` `misa` `mvendorid` `marchid` `mimpid` `mhartid` `mcycle` `minstret` |
+| **Caches** | Parameterised I$ and D$ — capacity, block size, associativity, write-through/no-allocate or write-back/write-allocate |
+| **Not implemented** | Interrupts, `mstatus`, `FENCE.I`, any extension beyond base I |
 
-| Load-use stall | Mispredict recovery | Trap at MEM commit |
-|---|---|---|
-| ![Load-use stall](docs/timing_load_use.svg) | ![Mispredict recovery](docs/timing_mispredict.svg) | ![Trap commit](docs/timing_trap.svg) |
+## Synthesis
+
+Out-of-context synth → place → route, Vivado 2025.2, target `xc7a35ticsg324-1L` (Arty A7-35T). Backing memories sized to 512 words for the study; fmax derived from worst negative slack against a deliberately-unachievable 2 ns constraint.
+
+| Config | fmax | LUT | FF | BRAM |
+|---|---|---|---|---|
+| core only | 79.2 MHz | 3,990 (19%) | 4,966 (12%) | 0 |
+| + 1KB I$ (4-way) | 76.7 MHz | 10,530 (51%) | 14,891 (36%) | 0 |
+| + 4KB D$ write-through | 76.2 MHz | 14,237 (68%) | 21,545 (52%) | 4 × RAMB18 |
+| + 4KB D$ write-back | 75.8 MHz | 14,850 (71%) | 21,500 (52%) | 4 × RAMB18 |
+
+Getting the D-cache to fit took four RTL revisions, and the intermediate results were the lesson: a registered read alone changed nothing (316% → 315% LUT); splitting the `[WAYS][SETS][BLOCK_WORDS]` array into per-way flat arrays did the real work (→ 82%); and `ram_style="block"` was *refused* until the two write addresses in one `always_ff` were muxed into one — a BRAM port has a single address input. Full progression in [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md#synthesis).
 
 ## Performance
 
-Five C kernels, compiled with the same toolchain the compliance suite uses. Nothing is hand-checked: each kernel is also compiled for the host and run there, and the CPU's result is compared against that, so a wrong answer fails the run rather than quietly skewing a number.
+Five C kernels, each also compiled for the host and run there — the CPU's result is checked against that, so a wrong answer fails the run rather than quietly skewing a number. CPI against a 10-cycle backing memory:
 
-`crc32` is a tight bitwise loop, `matmul` a 16x16 integer multiply, `sort` a data-dependent bubble sort, `llist` a deliberately cache-hostile scattered pointer chase, and `interp` a stack-machine interpreter whose dispatch chain gives the I-cache a real instruction footprint to miss on.
-
-CPI against a 10-cycle backing memory:
-
-| kernel | no caches | +1KB I-cache | +4KB write-back D-cache | ideal 1-cycle memory |
+| kernel | no caches | +1KB I$ | +4KB write-back D$ | ideal 1-cycle memory |
 |---|---|---|---|---|
-| crc32  | 11.36 | 1.51 | **1.18** | 1.17 |
-| matmul | 11.39 | 1.47 | **1.18** | 1.18 |
-| sort   | 12.48 | 4.22 | **1.25** | 1.25 |
-| llist  | 10.00 | 4.36 | **1.03** | 1.00 |
-| interp | 11.88 | 2.60 | **1.19** | 1.19 |
+| crc32  | 11.36 | 2.60 | **2.31** | 1.17 |
+| matmul | 11.39 | 2.58 | **2.32** | 1.18 |
+| sort   | 12.48 | 5.14 | **2.50** | 1.25 |
+| llist  | 10.00 | 4.99 | **2.02** | 1.00 |
+| interp | 11.88 | 3.63 | **2.38** | 1.19 |
 
-The last column is the same core with a one-cycle memory — a machine that can never stall on an access. The cached configuration lands within 0.1–3% of it while actually paying 10 cycles per backing-memory access, so the hierarchy recovers essentially the whole latency penalty.
+`crc32` is a tight bitwise loop, `matmul` a 16×16 integer multiply, `sort` a data-dependent bubble sort, `llist` a deliberately cache-hostile pointer chase, `interp` a stack-machine interpreter with a real instruction footprint.
 
-Three results from the sweeps that are worth more than the headline:
+The hierarchy recovers most of a 10-cycle memory penalty — roughly 5× on the worst kernel — but lands about 2× off the ideal-memory column, not near it. That gap is the registered cache read the FPGA requires: one extra cycle on every hit, the direct cost of the array living in Block RAM rather than flip-flops. It's the clearest example in the project of a design decision that looks free in simulation and isn't.
 
-**Bigger blocks are not better blocks.** On `interp` with a 512B I-cache, sweeping block size inverts the two metrics against each other: 8-word blocks give the highest hit rate (96.8%) and the *worst* CPI (3.48), while 1-word blocks give the lowest hit rate (93.3%) and the *best* CPI (3.02). Refill cost outruns the locality it buys, and a cache tuned on hit rate alone would have picked the slowest configuration on the board. Measuring this at all requires the backing memory to model burst transfers (see the memory-hierarchy diagram below); charge full latency per word and every block size above one loses for a reason that is an artifact of the model rather than a property of caches.
+Three findings from the geometry sweeps (measured pre-BRAM-rework; the qualitative results hold, the exact figures predate the extra hit cycle):
 
-**Write-back is not a free upgrade.** It wins big where stores dominate — `sort` goes 2.25 to 1.25 CPI at 1KB — but *loses* to write-through on `matmul` at 256B and 1KB (1.54 vs 1.48, 1.32 vs 1.26). Write-allocate fetches a block before overwriting it, which is wasted work for a kernel that streams writes into memory it never reads back. The two policies cross over at 4KB.
-
-**The hostile kernel behaves hostilely, until it doesn't.** `llist` chases 4KB of scattered pointers. With 1-word blocks it hits 0.17% of the time — the control case confirming the cache isn't quietly succeeding for the wrong reason. With 4-word blocks it reaches 74%, and at 4KB, where the pool finally fits, 99.3%. Non-monotonic in block size too: 8-word blocks are *worse* than 4-word (62.8% vs 74.2%), because a fixed capacity split into fewer, larger blocks thrashes harder on a scattered access pattern.
+- **Bigger blocks are not better blocks.** On `interp`/512B I$, 8-word blocks gave the *best* hit rate (96.8%) and the *worst* CPI (3.48); 1-word blocks the worst hit rate (93.3%) and best CPI (3.02). Tuning on hit rate alone picks the slowest config on the board.
+- **Write-back is not a free upgrade.** It wins big where stores dominate (`sort`: 2.25 → 1.25 CPI at 1KB) but *loses* to write-through on `matmul` at 256B and 1KB — write-allocate fetches a block before overwriting it. They cross over at 4KB.
+- **Non-monotonic in block size.** `llist` hits 74% with 4-word blocks but only 62.8% with 8-word: fixed capacity split into fewer, larger blocks thrashes harder on scattered access.
 
 ## Verification
 
-- **11 hand-written directed tests** covering every instruction class, plus specific hazard, prediction, and exception-round-trip scenarios (each one written to catch a specific failure mode, not just exercise the happy path).
-- **The official RISC-V `riscv-arch-test` compliance suite** (`rv32i_m/I`, base integer): **38/38 passing**, each result diffed word-for-word against the golden reference signature.
-- **CI matrix**: the full directed suite runs across 6 cache/latency configurations on every push (baseline, slow memory, I-cache only, write-through D$, write-back D$, 2-way associative) — 66 test executions, all required to agree, because the architectural result must be invariant to cache configuration. The compliance sweep runs whenever the RTL changes.
-- `make lint` is clean under `verilator --lint-only -Wall`, with every waiver in [`rtl/verilator.vlt`](rtl/verilator.vlt) carrying a one-line justification.
-- **13 SVA properties** (`rtl/cpu.sv`, `rtl/reg_file.sv`) check control-flow/redirect priority, deadlock/memory, register-file, and forwarding invariants on every cycle of every test — built into every simulator binary via `--assert`, so a violation aborts the run rather than passing silently.
-- **Functional coverage** (`make coverage`, `verilator`'s `cover property`, the supported stand-in for SystemVerilog covergroups on this toolchain): forwarding-path crosses, predictor-outcome crosses, control-flow type, trap causes, and the full D-cache FSM. Currently **25/38 (65.8%)** from the directed suite alone — see [`docs/coverage.md`](docs/coverage.md) for the point-by-point breakdown and what's still unhit.
-- **Constrained-random regression** (`make soak SEEDS=1000`): random ALU/load-store programs checked against a small Python reference model ([`tools/rv32i_model.py`](tools/rv32i_model.py)) — a pragmatic stand-in for Spike, which needs build tooling this sandbox doesn't have root to install. 1000 seeds pass clean against both the cacheless and cache-enabled builds.
-
-See [`docs/VERIFICATION_PLAN.md`](docs/VERIFICATION_PLAN.md) for what's tested, by what mechanism, and what's explicitly not tested yet.
-
-## Memory hierarchy
-
-![Memory hierarchy](docs/mem_hierarchy.svg)
-
-`lsu` handles subword alignment, `dcache` holds the write-through/write-back policy, and `mem_timing` is the access-cost model that every CPI number in the performance table is scaled by — it's what makes the burst-refill discount (and therefore the block-size sweep above) mean anything.
-
-![D-cache FSM](docs/cache_fsm.svg)
-
-## Architecture
-
-| Module | Role |
+| Mechanism | Coverage |
 |---|---|
-| `pc.sv`, `instr_mem.sv` | Fetch |
-| `control.sv`, `reg_file.sv`, `imm_gen.sv` | Decode |
-| `alu.sv`, `branch_unit.sv`, `forwarding_unit.sv`, `branch_predictor.sv` | Execute |
-| `lsu.sv`, `dcache.sv`, `data_mem.sv` | Memory |
-| `icache.sv` | Instruction cache (fetch path) |
-| `mem_timing.sv` | Backing-memory access-cost model |
-| `csr.sv` | Exception/CSR commit point |
-| `hazard_detect.sv` | Load-use stall detection |
-| `if_id_reg.sv` / `id_ex_reg.sv` / `ex_mem_reg.sv` / `mem_wb_reg.sv` | Pipeline registers |
-| `rv32i_pkg.sv` | Shared opcode/ALU-op constants |
+| Directed tests | 15, one per hazard/instruction-class/trap scenario |
+| Compliance | `riscv-arch-test` `rv32i_m/I` — **38/38** |
+| CI matrix | Directed suite × 6 cache/latency configs per push; result must be invariant to cache config |
+| Assertions | 13 SVA properties, live in every build via `--assert` |
+| Functional coverage | 38 cover points, 25 hit (65.8%) — [`docs/coverage.md`](docs/coverage.md) |
+| Constrained-random | 1000 seeds vs. a Python reference model, ALU/load-store subset |
+| Lint | `verilator -Wall` clean, waivers justified in [`rtl/verilator.vlt`](rtl/verilator.vlt) |
 
-Every pipeline register carries a `valid` bit end-to-end, so a flushed bubble is always distinguishable from a genuinely-retired instruction — this is what makes the performance counters and precise exceptions trustworthy rather than approximate.
+See [`docs/VERIFICATION_PLAN.md`](docs/VERIFICATION_PLAN.md) for what each mechanism catches and what it explicitly doesn't.
 
-## Building and running
+## Build
 
-Requires **Verilator**. For the compliance suite, also **the RISC-V GNU toolchain**.
+Requires **Verilator**; the compliance suite also needs the **RISC-V GNU toolchain**.
 
 ```bash
-make lint      # syntax/structure check, no build
-make all       # build the simulator, run all directed tests (assertions live)
-make bench     # run the C benchmark kernels, print a CPI table
-make coverage  # build with functional coverage, run the suite, write docs/coverage.md
+make all        # build + run directed tests (assertions live)
+make bench      # C kernels, CPI table
+make coverage   # functional coverage report
+make soak SEEDS=1000
 ```
 
-Cache and latency settings are RTL parameters, so each configuration is its own simulator build (see `make all IC_BYTES=... DC_BYTES=... DC_WB=... IMEM_LAT=... DMEM_LAT=...`, or the CI matrix in [`.github/workflows/rtl-tests.yml`](.github/workflows/rtl-tests.yml) for the exact combinations exercised):
+Cache geometry is a set of RTL parameters, so each configuration is its own build:
 
 ```bash
 make all IC_BYTES=1024 IC_WAYS=4 DC_BYTES=4096 DC_WAYS=4 DC_WB=1 IMEM_LAT=10 DMEM_LAT=10
 ```
 
-```bash
-ARCH_TEST=~/riscv-arch-test compliance/run_compliance.sh   # defaults to $HOME/riscv-arch-test
-```
-
-The benchmark runner and sweep scripts use the same parameters and cache builds per configuration:
-
-```bash
-./bench/run_bench.sh 10 1024 4 1
-DC_BYTES=4096 DC_WB=1 ./bench/run_bench.sh 10 1024 4 1
-./bench/sweep.sh 10
-./bench/sweep_dcache.sh 10
-```
+Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) for the per-config invocation.
 
 ## What I learned
 
@@ -122,16 +96,15 @@ DC_BYTES=4096 DC_WB=1 ./bench/run_bench.sh 10 1024 4 1
 - **The narrowest bugs are the easiest to miss and the most worth finding.** A same-cycle register-file write/read race, a CSR value that wasn't threaded through forwarding correctly, `FENCE` silently trapping as illegal — none of these fit the "adjacent instruction" mental model that motivates most hazard logic, and none of my own directed tests caught them until I specifically went looking.
 - **Precise exceptions are a control-flow discipline, not a checklist.** Getting `mepc`/`mcause` right is easy; making sure a trap can't corrupt or duplicate architectural state under speculation (a mispredicted branch, an in-flight load) is the actual work.
 - **Passing your own tests and being *correct* are different claims.** The compliance suite exists because directed tests, however careful, reflect the blind spots of whoever wrote them. Running against an external, independently-generated reference is what turns "I believe this works" into "this is verified."
+- **Simulation hides the cost of memory.** A combinational array read is free in Verilator and impossible in a Block RAM. Synthesis turned a "1.18 CPI" cache into a 2.3 CPI cache and a silent 3.2×-over-budget design into one that fits — neither fact was visible from any amount of simulation.
 
-See [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md) for a fuller spec: every major trade-off with its stated cost, the hazard/exception model, and known limitations in one place.
+## Limitations
 
-## Notes
+- **fmax is a working number, not a good one.** ~76–79 MHz with zero timing optimization attempted: no retiming, no pipelining of the tag-compare/way-select path, no shortening of the redirect priority chain.
+- **The pipeline freezes globally on a memory stall** rather than letting the back end drain through a fetch miss. It inflates cached and uncached numbers alike, so it doesn't manufacture a speedup — but a decoupled front end would make the I-cache look less essential than it does here.
+- **The I-cache and backing memories still don't use Block RAM.** The D-cache pattern applies directly; not done because the I-cache already fit.
+- **No interrupts, no `mstatus`.** Synchronous exceptions are precise and tested; nothing asynchronous exists.
+- **No `FENCE.I`.** Split I$/D$ with no coherence, so self-modifying code can read stale instructions. No test or benchmark here does that.
+- **Random testing covers ALU/load-store only** — no branches, traps, or CSRs, because the Python reference model doesn't interpret them. Spike lockstep would close this.
 
-This is a learning project — a real, working pipelined core with genuine hazard/prediction/exception logic and a measured memory hierarchy, verified against the actual RISC-V spec, and now synthesized (see [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md#synthesis)) — but not power-aware, and not carrying a randomized/formal verification methodology beyond the directed and compliance test suites described above.
-
-Limitations worth stating plainly, because they bound what the numbers above mean:
-
-- **The cache speedups above are CPI-only, and synthesis shows that number flatters them.** All four configurations now synthesize, place and route on an Arty A7-35T (Vivado 2025.2), landing between 79 MHz (core alone) and 76 MHz (either D-cache config), with the D-cache data array in real Block RAM. But getting there cost the caches a cycle of read latency they didn't previously model, which is why the write-back CPI figures above are ~2.3 rather than the ~1.18 an unregistered-read cache reported — and the caches also cost ~3 MHz of frequency. Both effects push the same way: this core's cache benefit is real but meaningfully smaller than a CPI-only table suggests, and only synthesis surfaced either half of that. The [Synthesis section](docs/MICROARCHITECTURE.md#synthesis) of the microarchitecture doc has the per-config numbers and the four-step RTL progression it took to fit.
-- **The pipeline freezes globally on a memory stall** rather than letting the back end drain through an instruction-fetch miss. It costs overlap a real design would recover, and it inflates the cached and uncached numbers alike, so it doesn't manufacture a speedup — but a decoupled front end with a fetch buffer would make the I-cache look slightly less essential than it does here.
-- **No `FENCE.I`.** With a split I$/D$ and no coherence between them, self-modifying or dynamically-loaded code can read stale instructions after a store to code space — `FENCE.I` currently decodes as a no-op (it shares an opcode with the already-no-op `FENCE`) rather than invalidating the I-cache. None of the directed tests, the compliance suite, or the benchmark kernels write to code they then execute, so this doesn't affect any result above; it would matter to a JIT or a bootloader.
-- **No interrupts.** The core takes synchronous exceptions correctly (illegal instruction, misaligned load/store/fetch, `ECALL`/`EBREAK`, illegal CSR access) but has no `mie`/`mip`, no timer, and no `mstatus.MIE` — `MRET` returns to `mepc` but doesn't restore an interrupt-enable stack. Exceptions are precise; asynchronous interrupts aren't implemented at all.
+[`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md) has the full spec: every trade-off with its measured cost, the hazard/exception model, and the complete synthesis progression.
