@@ -77,7 +77,9 @@ module dcache #(
         end
     end
 
-    logic [31:0]     data [WAYS][SETS][BLOCK_WORDS];
+    // Tag/valid/dirty stay small flip-flop arrays - narrow, and read
+    // combinationally every cycle for the tag compare. The 32-bit-wide data
+    // payload is the one worth handing to Block RAM; see g_way below.
     logic [TAGW-1:0] tag  [WAYS][SETS];
     logic            vld  [WAYS][SETS];
     logic            drty [WAYS][SETS];
@@ -129,9 +131,120 @@ module dcache #(
 
     assign flush_done = flush_complete;
 
-    // ---- CPU-side responses ----
-    assign read_word = data[hit_way][idx][off];
-    assign access    = req;
+    // ---- data storage: WAYS parallel single-way banks ----
+    // One 2D array per way (a flat [SETS][BLOCK_WORDS], byte-enabled write,
+    // registered read) instead of one [WAYS][SETS][BLOCK_WORDS] array
+    // indexed by a runtime way select: the combined 3D-array-plus-way-mux
+    // form doesn't match any BRAM inference template on Xilinx parts and
+    // synthesizes to flip-flops regardless of the read being registered.
+    // WAYS separate single-way arrays, read together and muxed *after* the
+    // register, is also how a real set-associative cache's data array is
+    // built in hardware - this restructuring isn't a workaround, it's the
+    // actual right shape.
+    //
+    // Both consumers (a CPU-side hit load and the write-back flush path)
+    // share one read address and one registered output per way, since the
+    // two are mutually exclusive in time (loads only resolve in S_IDLE,
+    // write-back only runs outside it) - the shared port costs nothing
+    // niether path would have paid alone, and it's one BRAM read port
+    // instead of needing two.
+    logic [IDXW-1:0] rd_idx;
+    logic [OFFW-1:0] rd_off;
+    assign rd_idx = (state == S_WB) ? wb_idx  : idx;
+    assign rd_off = (state == S_WB) ? wb_word : off;
+
+    // Which way's registered output is the one that matters, delayed to
+    // land on the same cycle the read it corresponds to becomes available.
+    logic [WAYW-1:0] sel_way_reg;
+    always_ff @(posedge clk) sel_way_reg <= (state == S_WB) ? wb_way : hit_way;
+
+    // A write this cycle, and which way it targets - shared by the
+    // write-through merge and the write-back-mode store-hit update, since
+    // both write hit_way/idx/off with byte_en/write_word.
+    logic wr_en;
+    assign wr_en = (state == S_IDLE) && req && line_present &&
+                   ((wt_store && mem_ready) || (!wt_store && is_store));
+
+    // A refill word landing this cycle, and which way it targets.
+    logic fill_en;
+    assign fill_en = (state == S_FILL) && mem_ready;
+
+    // Flat 1D, ram_style forced to block, and read+write combined in one
+    // always_ff: the canonical Xilinx byte-enable-BRAM template. A [SETS]
+    // [BLOCK_WORDS] 2D array with the write in a separate always_ff from the
+    // read didn't get picked up by inference at all (measured: LUT count
+    // barely moved and BRAM stayed at 0) - heuristic inference for a
+    // byte-enabled port is unreliable enough that spelling it out explicitly
+    // is the reliable way to get it, not a last resort.
+    localparam int WORDS = SETS * BLOCK_WORDS;
+    logic [31:0] way_rd_reg [WAYS];
+    for (genvar w = 0; w < WAYS; w++) begin : g_way
+        (* ram_style = "block" *) logic [31:0] way_mem [0:WORDS-1];
+        logic wr_this_way, fill_this_way;
+        assign wr_this_way   = wr_en   && (hit_way  == WAYW'(w));
+        assign fill_this_way = fill_en && (fill_way == WAYW'(w));
+
+        always_ff @(posedge clk) begin
+            if (wr_this_way) begin
+                for (int b = 0; b < 4; b++) begin
+                    if (byte_en[b]) way_mem[idx*BLOCK_WORDS + 32'(off)][8*b +: 8] <= write_word[8*b +: 8];
+                end
+            end else if (fill_this_way) begin
+                way_mem[idx*BLOCK_WORDS + 32'(fill_word)] <= mem_read_word;
+            end
+            way_rd_reg[w] <= way_mem[rd_idx*BLOCK_WORDS + 32'(rd_off)];
+        end
+    end
+
+    // Both consumers read the same muxed, registered output; they never
+    // need it in the same cycle (CPU loads resolve in S_IDLE, write-back
+    // reads happen outside it).
+    logic [31:0] rd_muxed;
+    assign rd_muxed = way_rd_reg[sel_way_reg];
+
+    logic wb_data_valid;
+    always_ff @(posedge clk) begin
+        if (rst || state != S_WB) wb_data_valid <= 1'b0;
+        else if (!wb_data_valid)  wb_data_valid <= 1'b1;
+        else if (mem_req && mem_ready) wb_data_valid <= 1'b0;
+    end
+
+    // A load hit takes one wait cycle for rd_muxed to catch up to the
+    // address that was live when the hit was detected; a store hit still
+    // completes same-cycle since it only writes; a write-through store
+    // likewise never touches this path (wt_store still reads mem_ready).
+    //
+    // ready must be level, not a pulse: this cache's own hit is only half of
+    // whether the pipeline actually advances next cycle - a concurrent
+    // I-cache stall (or anything else holding pipe_stall) can keep this
+    // exact request presented for several more cycles, and a wait flag that
+    // resets itself every cycle regardless would drop ready while the
+    // request is still outstanding, then re-arm and pulse again - forever.
+    //
+    // But it must also drop the instant the *address* changes, even to one
+    // that also hits - otherwise back-to-back hits at different addresses
+    // would report ready on the new address's first cycle, before rd_muxed
+    // has caught up to it. Comparing against the address a qualifying hit
+    // was last seen for (not just "was there a hit last cycle") is what
+    // makes both cases correct at once - see the matching comment in
+    // icache.sv.
+    logic        load_hit_now, prev_load_hit;
+    logic [31:0] prev_addr;
+    logic        load_hit_wait;
+    assign load_hit_now = (state == S_IDLE) && req && !wt_store && !is_store && line_present;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            prev_load_hit <= 1'b0;
+            prev_addr     <= 32'd0;
+        end else begin
+            prev_load_hit <= load_hit_now;
+            prev_addr     <= addr;
+        end
+    end
+    assign load_hit_wait = prev_load_hit && load_hit_now && (addr == prev_addr);
+
+    assign read_word = rd_muxed;
+    assign access     = req;
 
     // One pulse per access that finds its line absent. A write-through store
     // that misses sits in S_IDLE for its whole memory access without ever
@@ -152,8 +265,9 @@ module dcache #(
     always_comb begin
         if (state != S_IDLE) ready = 1'b0;
         else if (!req)       ready = 1'b1;
-        else if (wt_store)   ready = mem_ready;   // always pays memory
-        else                 ready = line_present;
+        else if (wt_store)   ready = mem_ready;      // always pays memory
+        else if (is_store)   ready = line_present;   // store-hit: no read-port wait
+        else                 ready = load_hit_wait;  // load-hit: registered read latency
     end
 
     // ---- memory-side requests ----
@@ -166,10 +280,10 @@ module dcache #(
 
         case (state)
             S_WB: begin   // flush the dirty victim, whole words, block order
-                mem_req        = 1'b1;
+                mem_req        = wb_data_valid;   // wait for rd_muxed to catch up
                 mem_burst      = 1'b1;
                 mem_byte_en    = 4'b1111;
-                mem_write_word = data[wb_way][wb_idx][wb_word];
+                mem_write_word = rd_muxed;
                 mem_addr       = ({{(32-TAGW){1'b0}}, tag[wb_way][wb_idx]} << (IDXSH + OFFSH + 2))
                                | ({{(32-IDXW){1'b0}}, wb_idx} << (OFFSH + 2))
                                | ({{(32-OFFW){1'b0}}, wb_word} << 2);
@@ -192,6 +306,9 @@ module dcache #(
     end
 
     // ---- state ----
+    // Note: the data payload itself (way_mem) is written up in g_way above,
+    // driven combinationally by wr_en/fill_en - not here. Everything here is
+    // metadata (tag/valid/dirty/victim) and the state machine.
     always_ff @(posedge clk) begin
         if (rst) begin
             state          <= S_IDLE;
@@ -223,23 +340,11 @@ module dcache #(
                         state     <= S_FLUSH;
                     end else if (req) begin
                         if (wt_store) begin
-                            // Keep a resident copy in step with memory. Gated on
-                            // mem_ready so the merge happens once, on the cycle
-                            // the write actually commits.
-                            if (mem_ready && line_present) begin
-                                for (int b = 0; b < 4; b++) begin
-                                    if (byte_en[b])
-                                        data[hit_way][idx][off][8*b +: 8] <= write_word[8*b +: 8];
-                                end
-                            end
+                            // no metadata change: a resident line's dirty bit
+                            // never gets set in write-through mode, and the
+                            // data merge itself happens in g_way above.
                         end else if (line_present) begin
-                            if (is_store) begin
-                                for (int b = 0; b < 4; b++) begin
-                                    if (byte_en[b])
-                                        data[hit_way][idx][off][8*b +: 8] <= write_word[8*b +: 8];
-                                end
-                                drty[hit_way][idx] <= 1'b1;
-                            end
+                            if (is_store) drty[hit_way][idx] <= 1'b1;
                         end else begin
                             // Miss: allocate. Loads always allocate; stores only
                             // do in write-back mode (write-allocate), and a
@@ -259,7 +364,7 @@ module dcache #(
                 end
 
                 S_WB: begin
-                    if (mem_ready) begin
+                    if (mem_req && mem_ready) begin
                         if (wb_word == OFFW'(BLOCK_WORDS - 1)) begin
                             wb_word          <= '0;
                             drty[wb_way][wb_idx] <= 1'b0;   // memory is current again
@@ -297,7 +402,8 @@ module dcache #(
 
                 default: begin   // S_FILL
                     if (mem_ready) begin
-                        data[fill_way][idx][fill_word] <= mem_read_word;
+                        // way_mem[idx][fill_word] itself is written in g_way
+                        // above; only metadata is updated here.
                         if (fill_word == OFFW'(BLOCK_WORDS - 1)) begin
                             // Claim the line only once the block is complete.
                             vld[fill_way][idx]  <= 1'b1;
