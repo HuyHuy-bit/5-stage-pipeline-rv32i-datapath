@@ -94,9 +94,46 @@ module icache #(
     logic [WAYW-1:0] fill_way;
 
     logic hit;
-    assign hit   = |way_hit;
-    assign ready = hit;
-    assign instr = data[hit_way][idx][off];
+    assign hit = |way_hit;
+
+    // Registered read: a combinational `assign instr = data[...]` infers
+    // distributed RAM/flops instead of Block RAM on Xilinx parts (7-series
+    // BRAM has no async-read mode) - see the matching comment in dcache.sv.
+    // Every fetch is a read (this cache never writes on the hit path), so
+    // every hit costs the one extra cycle for the registered read to catch
+    // up, tracked the same way dcache.sv tracks a load hit.
+    logic [31:0] data_rd_reg;
+    always_ff @(posedge clk) data_rd_reg <= data[hit_way][idx][off];
+
+    // ready must be level, not a pulse: whether the pipeline actually
+    // advances next cycle also depends on the D-cache, which can hold
+    // pipe_stall for several more cycles after this cache's own hit is
+    // detected, so a wait flag that just resets itself every cycle would
+    // drop ready while the same request is still outstanding, then re-arm
+    // and pulse again - oscillating forever instead of holding steady.
+    //
+    // But it must also drop back to 0 the instant the *address* changes,
+    // even if the new address also hits - otherwise back-to-back hits at
+    // different addresses would report ready on the new address's first
+    // cycle, before data_rd_reg has caught up to it. Comparing against the
+    // address a hit was last seen for (not just "was there a hit last
+    // cycle") is what makes both cases correct at once.
+    logic        prev_hit;
+    logic [31:0] prev_addr;
+    logic        hit_wait;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            prev_hit  <= 1'b0;
+            prev_addr <= 32'd0;
+        end else begin
+            prev_hit  <= hit;
+            prev_addr <= addr;
+        end
+    end
+    assign hit_wait = prev_hit && hit && (addr == prev_addr);
+
+    assign ready = hit_wait;
+    assign instr = data_rd_reg;
 
     // One pulse per refill: the cycle a miss is seen and no refill is running.
     assign miss_pulse = !hit && !refilling;
