@@ -169,30 +169,46 @@ module dcache #(
     logic fill_en;
     assign fill_en = (state == S_FILL) && mem_ready;
 
-    // Flat 1D, ram_style forced to block, and read+write combined in one
-    // always_ff: the canonical Xilinx byte-enable-BRAM template. A [SETS]
-    // [BLOCK_WORDS] 2D array with the write in a separate always_ff from the
-    // read didn't get picked up by inference at all (measured: LUT count
-    // barely moved and BRAM stayed at 0) - heuristic inference for a
-    // byte-enabled port is unreliable enough that spelling it out explicitly
-    // is the reliable way to get it, not a last resort.
+    // Flat 1D, ram_style forced to block, read+write in one always_ff: the
+    // canonical Xilinx byte-enable-BRAM template.
+    //
+    // Critically, ONE write address. A store writes `off` within the set and
+    // a refill writes `fill_word`; expressing those as two separate indexed
+    // assignments in the same block is what made Vivado report
+    //   "Infeasible attribute ram_style = block ... implementing using LUTRAM"
+    // and drop to distributed RAM, because a BRAM write port physically has
+    // exactly one address input. Muxing address/data/byte-enable ahead of
+    // the port - which is what the hardware does anyway - is the difference
+    // between the array landing in Block RAM and landing in LUTs.
+    //
+    // The two sources are mutually exclusive by construction (wr_en requires
+    // S_IDLE, fill_en requires S_FILL), so the mux needs no arbitration.
     localparam int WORDS = SETS * BLOCK_WORDS;
+    localparam int AW    = (WORDS <= 1) ? 1 : $clog2(WORDS);
+
+    logic [AW-1:0] wr_addr, rd_addr;
+    logic [31:0]   wr_data;
+    logic [3:0]    wr_be;
+    assign rd_addr = AW'(rd_idx * BLOCK_WORDS + 32'(rd_off));
+    assign wr_addr = fill_en ? AW'(idx * BLOCK_WORDS + 32'(fill_word))
+                             : AW'(idx * BLOCK_WORDS + 32'(off));
+    assign wr_data = fill_en ? mem_read_word : write_word;
+    assign wr_be   = fill_en ? 4'b1111       : byte_en;
+
     logic [31:0] way_rd_reg [WAYS];
     for (genvar w = 0; w < WAYS; w++) begin : g_way
         (* ram_style = "block" *) logic [31:0] way_mem [0:WORDS-1];
-        logic wr_this_way, fill_this_way;
-        assign wr_this_way   = wr_en   && (hit_way  == WAYW'(w));
-        assign fill_this_way = fill_en && (fill_way == WAYW'(w));
+        logic way_wr_en;
+        assign way_wr_en = (fill_en && (fill_way == WAYW'(w)))
+                        || (wr_en   && (hit_way  == WAYW'(w)));
 
         always_ff @(posedge clk) begin
-            if (wr_this_way) begin
+            if (way_wr_en) begin
                 for (int b = 0; b < 4; b++) begin
-                    if (byte_en[b]) way_mem[idx*BLOCK_WORDS + 32'(off)][8*b +: 8] <= write_word[8*b +: 8];
+                    if (wr_be[b]) way_mem[wr_addr][8*b +: 8] <= wr_data[8*b +: 8];
                 end
-            end else if (fill_this_way) begin
-                way_mem[idx*BLOCK_WORDS + 32'(fill_word)] <= mem_read_word;
             end
-            way_rd_reg[w] <= way_mem[rd_idx*BLOCK_WORDS + 32'(rd_off)];
+            way_rd_reg[w] <= way_mem[rd_addr];
         end
     end
 
