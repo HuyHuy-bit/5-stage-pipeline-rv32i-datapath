@@ -7,14 +7,25 @@ on:
 jobs:
   lint-and-test:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
     steps:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Install Verilator
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y verilator
+      # Ubuntu's apt package is Verilator 4.038 (2021) - it doesn't have
+      # --timing, which the assertions/coverage build (Makefile VFLAGS)
+      # depends on. conda-forge tracks current releases.
+      - name: Install Verilator (conda-forge)
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install verilator package
+        run: mamba install -y -c conda-forge verilator
 
       - name: Verilator version
         run: verilator --version
@@ -27,6 +38,9 @@ jobs:
   # I-cache never execute in CI at all (the default build is cacheless).
   test-matrix:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
     strategy:
       fail-fast: false
       matrix:
@@ -47,10 +61,15 @@ jobs:
       - name: Check out repo
         uses: actions/checkout@v4
 
-      - name: Install Verilator
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y verilator
+      - name: Install Verilator (conda-forge)
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install verilator package
+        run: mamba install -y -c conda-forge verilator
 
       - name: Run full test suite (${{ matrix.name }})
         run: make all ${{ matrix.args }}
