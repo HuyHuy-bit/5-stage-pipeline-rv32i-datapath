@@ -22,5 +22,35 @@ jobs:
       - name: Lint
         run: make lint
 
-      - name: Run full test suite
-        run: make all
+  # The directed suite must pass identically across cache configurations —
+  # that invariance is itself the test. Without this matrix, the D-cache and
+  # I-cache never execute in CI at all (the default build is cacheless).
+  test-matrix:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: baseline
+            args: ""
+          - name: slow-mem
+            args: "IMEM_LAT=10 DMEM_LAT=10"
+          - name: icache-only
+            args: "IC_BYTES=1024 IC_WAYS=4 IMEM_LAT=10 DMEM_LAT=10"
+          - name: wt
+            args: "IC_BYTES=1024 IC_WAYS=4 DC_BYTES=4096 DC_WAYS=4 DC_WB=0 IMEM_LAT=10 DMEM_LAT=10"
+          - name: wb
+            args: "IC_BYTES=1024 IC_WAYS=4 DC_BYTES=4096 DC_WAYS=4 DC_WB=1 IMEM_LAT=10 DMEM_LAT=10"
+          - name: assoc
+            args: "IC_BYTES=1024 IC_BLOCK=4 IC_WAYS=2 DC_BYTES=4096 DC_BLOCK=4 DC_WAYS=2 DC_WB=1 IMEM_LAT=10 DMEM_LAT=10"
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install Verilator
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y verilator
+
+      - name: Run full test suite (${{ matrix.name }})
+        run: make all ${{ matrix.args }}

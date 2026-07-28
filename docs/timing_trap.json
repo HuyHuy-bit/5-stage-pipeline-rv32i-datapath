@@ -1,0 +1,14 @@
+{
+  "signal": [
+    { "name": "clk",  "wave": "p......" },
+    { "name": "IF",   "wave": "x34566." , "data": ["older","illegal","younger1","mtvec","."]},
+    { "name": "ID",   "wave": "x.3456*." , "data": ["older","illegal","younger1","(squash)"]},
+    { "name": "EX",   "wave": "x..345*." , "data": ["older","illegal","(squash)"]},
+    { "name": "MEM",  "wave": "x...34x." , "data": ["older","illegal"]},
+    { "name": "WB",   "wave": "x....34." , "data": ["older","(no retire)"]},
+    { "name": "trap_redirect", "wave": "0...10.." },
+    { "name": "mepc/mcause", "wave": "x...3x.." , "data": ["written"]}
+  ],
+  "head": { "text": "Trap at the MEM commit point: older instruction retires normally, illegal instruction and the younger one behind it never write back, mepc/mcause latch, redirect to mtvec" },
+  "config": { "hscale": 1.3 }
+}

@@ -310,16 +310,15 @@ module cpu #(
     assign jalr_target_ex   = (rs1_data_ex_fwd + imm_ex) & ~32'd1;
 
     // Resolve the actual control-flow outcome in EX.
-    // pc_src_ex: 00=none(sequential), 01=conditional branch, 10=jalr, 11=jal
     logic        actual_taken;      // did this instruction actually redirect?
     logic [31:0] actual_target;     // ...and to where
     logic        is_cf_instr;       // is this a control-flow instruction at all?
     always_comb begin
         case (pc_src_ex)
-            2'b01:   begin actual_taken = branch_taken_ex; actual_target = branch_target_ex; is_cf_instr = 1'b1; end
-            2'b10:   begin actual_taken = 1'b1;            actual_target = jalr_target_ex;   is_cf_instr = 1'b1; end
-            2'b11:   begin actual_taken = 1'b1;            actual_target = branch_target_ex; is_cf_instr = 1'b1; end
-            default: begin actual_taken = 1'b0;            actual_target = 32'd0;            is_cf_instr = 1'b0; end
+            PC_SRC_BRANCH: begin actual_taken = branch_taken_ex; actual_target = branch_target_ex; is_cf_instr = 1'b1; end
+            PC_SRC_JALR:   begin actual_taken = 1'b1;            actual_target = jalr_target_ex;   is_cf_instr = 1'b1; end
+            PC_SRC_JAL:    begin actual_taken = 1'b1;            actual_target = branch_target_ex; is_cf_instr = 1'b1; end
+            default:       begin actual_taken = 1'b0;            actual_target = 32'd0;            is_cf_instr = 1'b0; end
         endcase
     end
 
@@ -366,6 +365,15 @@ module cpu #(
     assign bp_update_taken  = actual_taken;
     assign bp_update_target = actual_target;
 
+    // CSRRW(I) always writes; CSRRS/CSRRC(I) only when the operand is
+    // nonzero (rs1 field doubles as the 5-bit uimm for the *I variants, so
+    // rs1_addr_ex works for both forms).
+    logic csr_attempts_write, csr_access_illegal;
+    assign csr_attempts_write = (funct3_ex == F3_CSRRW) || (funct3_ex == F3_CSRRWI)
+                               || (rs1_addr_ex != 5'd0);
+    assign csr_access_illegal = !csr_implemented(csr_addr_ex)
+                               || (csr_attempts_write && csr_read_only(csr_addr_ex));
+
     // ---- EX-stage exception detection (Part 1: illegal instruction) ----
     // Detected here, but not acted on until the commit point in MEM, so that
     // exceptions resolve in program order (precise). Part 2 adds misaligned
@@ -378,6 +386,20 @@ module cpu #(
         if (valid_ex && illegal_ex) begin
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
+        end else if (valid_ex && is_csr_ex && csr_access_illegal) begin
+            // Either the address isn't implemented at all, or it's a
+            // structurally read-only CSR ([11:10]==11) and this access
+            // actually attempts a write (CSRRW(I) always writes; CSRRS/C(I)
+            // only when the rs1/uimm operand is nonzero).
+            exc_pending_ex = 1'b1;
+            exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
+        end else if (valid_ex && is_cf_instr && actual_taken && actual_target[1]
+                     && (pc_src_ex == PC_SRC_BRANCH || pc_src_ex == PC_SRC_JAL)) begin
+            // Without the C extension, a taken branch or JAL must land on a
+            // 4-byte boundary. JALR already masks bit 0 of its target (see
+            // its assign above) and is out of scope here, matching the plan.
+            exc_pending_ex = 1'b1;
+            exc_cause_ex   = CAUSE_MISALIGNED_FETCH;
         end else if (valid_ex && mem_read_ex) begin
             if ((funct3_ex[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
                 (funct3_ex[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
@@ -512,6 +534,7 @@ module cpu #(
     // gets flushed.
     logic        trap_take;       // a trap fires this cycle
     logic [31:0] trap_cause_w;
+    logic [31:0] trap_val_w;      // -> mtval: faulting address or instruction, if any
     logic        mret_take;       // an MRET commits this cycle
     logic        csr_commit;      // a CSR instruction commits its write this cycle
 
@@ -523,6 +546,7 @@ module cpu #(
     always_comb begin
         trap_take    = 1'b0;
         trap_cause_w = 32'd0;
+        trap_val_w   = 32'd0;
         mret_take    = 1'b0;
         csr_commit   = 1'b0;
 
@@ -535,6 +559,15 @@ module cpu #(
             if (exc_pending_mem) begin
                 trap_take    = 1'b1;               // illegal instruction (Part 1)
                 trap_cause_w = exc_cause_mem;
+                // mtval: faulting address for a misaligned access, the
+                // offending word for illegal instruction (including an
+                // illegal CSR access), 0 for misaligned-fetch (the target
+                // isn't carried this far — spec permits mtval reading 0).
+                case (exc_cause_mem)
+                    CAUSE_ILLEGAL_INSTR:                       trap_val_w = instr_mem_r;
+                    CAUSE_MISALIGNED_LOAD, CAUSE_MISALIGNED_STORE: trap_val_w = alu_result_mem;
+                    default: trap_val_w = 32'd0;
+                endcase
             end else if (is_ecall_mem) begin
                 trap_take    = 1'b1;
                 trap_cause_w = CAUSE_ECALL_M;
@@ -557,9 +590,11 @@ module cpu #(
         .csr_funct3(csr_funct3_mem),
         .csr_wdata(csr_wdata_mem),
         .csr_rdata(csr_rdata_commit),   // old CSR value -> write-back to rd
+        .cycle_count(perf_cycle_count), .instret_count(perf_instr_retired),
         .trap_en(trap_take),
         .trap_pc(pc_mem),
         .trap_cause(trap_cause_w),
+        .trap_val(trap_val_w),
         .mtvec_out(mtvec_val),
         .mret_en(mret_take),
         .mepc_out(mepc_val)
@@ -602,9 +637,9 @@ module cpu #(
     // WB stage
     always_comb begin
         case (wb_src_wb)
-            2'b01:   write_back_data = mem_read_data_wb; // loads
-            2'b10:   write_back_data = pc_plus4_wb;      // jal / jalr return address
-            default: write_back_data = alu_result_wb;    // r/i/lui/auipc
+            WB_SRC_MEM: write_back_data = mem_read_data_wb; // loads
+            WB_SRC_PC4: write_back_data = pc_plus4_wb;      // jal / jalr return address
+            default:    write_back_data = alu_result_wb;    // r/i/lui/auipc, and CSR (folded in above)
         endcase
     end
 
@@ -663,6 +698,118 @@ module cpu #(
             end
         end
     end
+
+    // ---- Design invariants, checked every cycle of every test ----
+    // Each property below is an invariant already explained in a comment
+    // elsewhere in this file; this is that same reasoning made falsifiable.
+
+    // -- control-flow / redirect --
+    a_trap_mret_excl: assert property (@(posedge clk) disable iff (rst)
+        !(trap_take && mret_take));
+    a_freeze_pc_stable: assert property (@(posedge clk) disable iff (rst)
+        pipe_stall |=> $stable(pc_out));
+    a_redirect_priority_trap: assert property (@(posedge clk) disable iff (rst)
+        (trap_redirect && !pipe_stall) |-> (next_pc == trap_target));
+    a_redirect_priority_mispredict: assert property (@(posedge clk) disable iff (rst)
+        (ex_flush && !pipe_stall && !trap_redirect) |-> (next_pc == ex_resolved_target));
+
+    // -- deadlock / memory --
+    a_no_faulting_req: assert property (@(posedge clk) disable iff (rst)
+        dmem_req |-> !exc_pending_mem);
+    // dbg_flush is a testbench-only cache-drain hook, not a hazard stall — it
+    // can legitimately hold pipe_stall for as long as it takes to walk every
+    // set/way of the D-cache, which is unbounded by this property's design.
+    a_stall_bounded: assert property (@(posedge clk) disable iff (rst || dbg_flush)
+        pipe_stall |-> ##[1:256] (pipe_stall == 1'b0));
+
+    // -- register file / writeback --
+    // x0-never-written lives in reg_file.sv, next to the array it protects.
+    a_bubble_no_retire: assert property (@(posedge clk) disable iff (rst)
+        !valid_wb |-> !reg_write_en_wb);
+    a_trap_no_retire: assert property (@(posedge clk) disable iff (rst)
+        trap_take |-> !reg_write_en_mem_gated);
+
+    // -- forwarding --
+    a_fwd_a_priority: assert property (@(posedge clk) disable iff (rst)
+        (reg_write_en_mem && rd_addr_mem != 5'd0 && rd_addr_mem == rs1_addr_ex)
+        |-> forward_a == 2'b01);
+    a_fwd_b_priority: assert property (@(posedge clk) disable iff (rst)
+        (reg_write_en_mem && rd_addr_mem != 5'd0 && rd_addr_mem == rs2_addr_ex)
+        |-> forward_b == 2'b01);
+    a_fwd_a_no_x0: assert property (@(posedge clk) disable iff (rst)
+        rs1_addr_ex == 5'd0 |-> forward_a == 2'b00);
+    a_fwd_b_no_x0: assert property (@(posedge clk) disable iff (rst)
+        rs2_addr_ex == 5'd0 |-> forward_b == 2'b00);
+
+    // ---- Functional coverage ----
+    // SystemVerilog covergroups aren't supported by this toolchain (COVERIGN);
+    // cover property is the supported equivalent and feeds the same
+    // --coverage database, read back with verilator_coverage. Crosses are
+    // written out as explicit conjunctions since there's no native cross.
+`ifdef VERILATOR
+    logic cov_en; assign cov_en = !rst;
+
+    // forward_a x forward_b (9 crosses)
+    genvar gi, gj;
+    generate
+        for (gi = 0; gi < 3; gi++) begin : g_fwd_a
+            for (gj = 0; gj < 3; gj++) begin : g_fwd_b
+                cover property (@(posedge clk) disable iff (rst)
+                    cov_en && forward_a == gi[1:0] && forward_b == gj[1:0]);
+            end
+        end
+    endgenerate
+
+    // predictor outcome: predicted_taken x actual_taken x target_match, only
+    // meaningful for an actual control-flow instruction in EX
+    logic cov_target_match;
+    assign cov_target_match = (actual_target == predicted_target_ex);
+    c_pred_tt_match:   cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && actual_taken && cov_target_match);
+    c_pred_tt_mismatch: cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && actual_taken && !cov_target_match);
+    c_pred_tn:          cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && !actual_taken);
+    c_pred_nt:          cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && !predicted_taken_ex && actual_taken);
+    c_pred_nn:          cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && is_cf_instr && !predicted_taken_ex && !actual_taken);
+    c_false_predict:    cover property (@(posedge clk) disable iff (rst)
+        cov_en && false_predict);
+
+    // control-flow type (pc_src_ex) x taken/not-taken
+    c_branch_taken:    cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == PC_SRC_BRANCH && actual_taken);
+    c_branch_nottaken: cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == PC_SRC_BRANCH && !actual_taken);
+    c_jalr:            cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == PC_SRC_JALR);
+    c_jal:              cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_ex && pc_src_ex == PC_SRC_JAL);
+
+    // trap cause, each implemented cause hit at least once
+    c_cause_illegal:    cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_ILLEGAL_INSTR);
+    c_cause_mis_load:   cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_MISALIGNED_LOAD);
+    c_cause_mis_store:  cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_MISALIGNED_STORE);
+    c_cause_ecall:      cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_ECALL_M);
+    c_cause_ebreak:     cover property (@(posedge clk) disable iff (rst)
+        cov_en && trap_take && trap_cause_w == CAUSE_BREAKPOINT);
+    c_mret:             cover property (@(posedge clk) disable iff (rst)
+        cov_en && mret_take);
+
+    // hazard interactions
+    c_load_use_and_mispredict: cover property (@(posedge clk) disable iff (rst)
+        cov_en && load_use_stall && ex_flush);
+    // trap_redirect only ever fires when !pipe_stall (see the commit-point
+    // comment above), so the interesting cross is a trap-eligible instruction
+    // parked in MEM *during* a stall, one cycle before it can commit.
+    c_trap_pending_and_stall: cover property (@(posedge clk) disable iff (rst)
+        cov_en && valid_mem && exc_pending_mem && pipe_stall);
+`endif
 
 endmodule
 

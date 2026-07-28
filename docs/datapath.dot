@@ -1,0 +1,68 @@
+digraph datapath {
+    rankdir=LR;
+    graph [fontname="Helvetica", fontsize=11, bgcolor="white"];
+    node  [fontname="Helvetica", fontsize=10, shape=box, style="rounded,filled", fillcolor="#eef2ff", color="#4338ca"];
+    edge  [fontname="Helvetica", fontsize=9, color="#555555"];
+
+    subgraph cluster_if {
+        label="IF"; style=dashed; color="#94a3b8";
+        pc [label="PC"];
+        icache [label="I-cache /\ninstr_mem"];
+        pc -> icache;
+    }
+    subgraph cluster_id {
+        label="ID"; style=dashed; color="#94a3b8";
+        control [label="control"];
+        regfile [label="reg_file"];
+        immgen  [label="imm_gen"];
+        hazard  [label="hazard_detect\n(load-use)"];
+    }
+    subgraph cluster_ex {
+        label="EX"; style=dashed; color="#94a3b8";
+        alu    [label="alu"];
+        bunit  [label="branch_unit"];
+        fwd    [label="forwarding_unit"];
+    }
+    subgraph cluster_mem {
+        label="MEM"; style=dashed; color="#94a3b8";
+        lsu    [label="lsu"];
+        dcache [label="dcache /\ndata_mem"];
+        csr    [label="csr\n(trap commit point)", fillcolor="#fee2e2", color="#b91c1c"];
+    }
+    subgraph cluster_wb {
+        label="WB"; style=dashed; color="#94a3b8";
+        wbmux  [label="writeback mux"];
+    }
+
+    ifid  [label="IF/ID", shape=box, style=filled, fillcolor="#fef9c3", color="#a16207"];
+    idex  [label="ID/EX", shape=box, style=filled, fillcolor="#fef9c3", color="#a16207"];
+    exmem [label="EX/MEM", shape=box, style=filled, fillcolor="#fef9c3", color="#a16207"];
+    memwb [label="MEM/WB", shape=box, style=filled, fillcolor="#fef9c3", color="#a16207"];
+
+    icache -> ifid -> control;
+    ifid -> regfile; ifid -> immgen;
+    control -> idex; regfile -> idex; immgen -> idex;
+    idex -> alu; idex -> bunit;
+    alu -> exmem; bunit -> exmem;
+    exmem -> lsu -> dcache -> memwb;
+    exmem -> csr [label="trap check"];
+    memwb -> wbmux -> regfile [label="writeback", style=dashed, color="#16a34a", constraint=false];
+
+    // forwarding paths
+    exmem -> fwd [style=dashed, color="#2563eb", label="EX/MEM fwd"];
+    memwb -> fwd [style=dashed, color="#2563eb", label="MEM/WB fwd"];
+    fwd -> alu [style=dashed, color="#2563eb"];
+
+    // hazard / stall
+    idex -> hazard [style=dashed, color="#dc2626", constraint=false];
+    hazard -> ifid [label="stall", style=dashed, color="#dc2626", constraint=false];
+    hazard -> pc [label="stall", style=dashed, color="#dc2626", constraint=false];
+
+    // redirects back to PC, priority annotated
+    predmux [label="next-PC priority mux\nfreeze > trap > mispredict\n> load-use stall > predict > +4",
+             shape=box, style="rounded,filled", fillcolor="#dcfce7", color="#15803d"];
+    bunit -> predmux [label="EX mispredict\nredirect", color="#ea580c", fontcolor="#ea580c"];
+    csr   -> predmux [label="MEM trap\nredirect", color="#b91c1c", fontcolor="#b91c1c"];
+    icache -> predmux [label="predicted-taken\nredirect", color="#7c3aed", fontcolor="#7c3aed", style=dashed];
+    predmux -> pc [label="next_pc"];
+}

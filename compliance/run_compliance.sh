@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -u
 
-ARCH_TEST=~/projects/riscv-arch-test
-COMPLIANCE=~/projects/rv32i-pipeline/compliance
-SIM=~/projects/rv32i-pipeline/obj_dir/Vcpu
+ARCH_TEST="${ARCH_TEST:-$HOME/riscv-arch-test}"
+REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
+COMPLIANCE="$REPO_ROOT/compliance"
+SIM="$REPO_ROOT/obj_dir/Vcpu"
 CYCLES=2000
 
 SRC_DIR="$ARCH_TEST/riscv-test-suite/rv32i_m/I/src"

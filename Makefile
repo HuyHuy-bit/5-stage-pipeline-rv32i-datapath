@@ -1,4 +1,4 @@
-# ---- RV32I single-cycle CPU: Verilator build + multi-test suite ----
+# ---- RV32I 5-stage pipelined CPU: Verilator build + multi-test suite ----
 TOP      = cpu
 TB       = cpu_tb.cpp
 
@@ -9,15 +9,39 @@ CPU_SRCS = rtl/rv32i_pkg.sv \
            rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/csr.sv \
            rtl/mem_timing.sv rtl/icache.sv rtl/lsu.sv rtl/dcache.sv
 
-VFLAGS   = --cc --exe --build --trace -j 0
+# Cache/latency configuration. Defaults match the plain no-cache build so
+# `make all` with no arguments behaves exactly as before.
+IC_BYTES ?= 0
+IC_BLOCK ?= 4
+IC_WAYS  ?= 1
+DC_BYTES ?= 0
+DC_BLOCK ?= 4
+DC_WAYS  ?= 1
+DC_WB    ?= 0
+IMEM_LAT ?= 1
+DMEM_LAT ?= 1
+
+GPARAMS  = -GIMEM_LATENCY=$(IMEM_LAT) -GDMEM_LATENCY=$(DMEM_LAT) \
+           -GICACHE_BYTES=$(IC_BYTES) -GICACHE_BLOCK_WORDS=$(IC_BLOCK) -GICACHE_WAYS=$(IC_WAYS) \
+           -GDCACHE_BYTES=$(DC_BYTES) -GDCACHE_BLOCK_WORDS=$(DC_BLOCK) -GDCACHE_WAYS=$(DC_WAYS) \
+           -GDCACHE_WRITE_BACK=$(DC_WB)
+
+VFLAGS   = --cc --exe --build --trace --assert --timing -j 0
+# The all-defaults config keeps the plain "obj_dir" name other scripts (e.g.
+# bench/run_bench.sh) already expect; any non-default config gets its own dir
+# so configs don't clobber each other's cached build.
+ifeq ($(IC_BYTES)$(IC_BLOCK)$(IC_WAYS)$(DC_BYTES)$(DC_BLOCK)$(DC_WAYS)$(DC_WB)$(IMEM_LAT)$(DMEM_LAT),041041011)
 OBJDIR   = obj_dir
+else
+OBJDIR   = obj_dir_ic$(IC_BYTES)_$(IC_BLOCK)_$(IC_WAYS)_dc$(DC_BYTES)_$(DC_BLOCK)_$(DC_WAYS)_$(DC_WB)_L$(IMEM_LAT)_$(DMEM_LAT)
+endif
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
 
-TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret
+TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
-.PHONY: all sim assemble test memtiming bench lint wave clean
+.PHONY: all sim assemble test memtiming bench lint wave clean coverage soak
 
 # Default: build, assemble, run the full suite.
 all: sim assemble test
@@ -25,7 +49,7 @@ all: sim assemble test
 # Build the simulator binary.
 sim: $(SIM)
 $(SIM): $(CPU_SRCS) $(TB)
-	verilator $(VFLAGS) --top-module $(TOP) $(CPU_SRCS) $(TB)
+	verilator $(VFLAGS) $(GPARAMS) --Mdir $(OBJDIR) --top-module $(TOP) $(CPU_SRCS) $(TB)
 
 # Assemble every test program that is out of date.
 assemble: $(HEXFILES)
@@ -63,9 +87,9 @@ test: sim assemble memtiming
 bench: sim
 	@./bench/run_bench.sh
 
-# Lint only — quick syntax/structure check.
+# Lint only — quick syntax/structure check, -Wall with a documented waiver file.
 lint:
-	verilator --lint-only --top-module $(TOP) $(CPU_SRCS)
+	verilator --lint-only -Wall --top-module $(TOP) rtl/verilator.vlt $(CPU_SRCS)
 
 # Open a specific test waveform: make wave TEST=t04_branch
 TEST ?= t01_rtype
@@ -75,5 +99,32 @@ wave: sim assemble
 	         +VCD=tests/$(TEST).vcd
 	gtkwave tests/$(TEST).vcd &
 
+# Functional coverage: build with --coverage against a cache-enabled config
+# (so the D-cache FSM points are reachable), run the directed suite, merge
+# and annotate. Report: docs/coverage.md.
+COVDIR = obj_dir_cov
+coverage: assemble
+	verilator --cc --exe --build --trace --assert --timing --coverage \
+	    -GIMEM_LATENCY=10 -GDMEM_LATENCY=10 \
+	    -GICACHE_BYTES=1024 -GICACHE_BLOCK_WORDS=4 -GICACHE_WAYS=4 \
+	    -GDCACHE_BYTES=4096 -GDCACHE_BLOCK_WORDS=4 -GDCACHE_WAYS=4 -GDCACHE_WRITE_BACK=1 \
+	    --Mdir $(COVDIR) --top-module $(TOP) $(CPU_SRCS) $(TB)
+	@rm -rf coverage && mkdir -p coverage
+	@for t in $(TESTS); do \
+	    CYCS=$$(grep '^cycles=' tests/$$t.ref 2>/dev/null | cut -d= -f2); CYCS=$${CYCS:-25}; \
+	    ./$(COVDIR)/V$(TOP) +MEMFILE=tests/$$t.hex +REFFILE=tests/$$t.ref \
+	        +CYCLES=$$CYCS +VCD= +COVERAGE=coverage/$$t.dat > /dev/null; \
+	done
+	verilator_coverage --write coverage/merged.dat coverage/*.dat
+	verilator_coverage --annotate coverage/annotated coverage/merged.dat
+	python3 tools/coverage_report.py coverage/merged.dat > docs/coverage.md
+	@echo "wrote docs/coverage.md"
+
+# Constrained-random regression: SEEDS random programs against the Python
+# golden model (tools/rv32i_model.py). make soak SEEDS=1000
+SEEDS ?= 100
+soak: sim
+	./tools/soak.sh $(SEEDS)
+
 clean:
-	rm -rf $(OBJDIR) obj_dir_L* obj_dir_memtiming tests/*.hex tests/*.vcd cpu.vcd
+	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming obj_dir_cov coverage tests/*.hex tests/*.vcd cpu.vcd

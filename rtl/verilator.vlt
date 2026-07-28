@@ -1,0 +1,31 @@
+`verilator_config
+
+// import rv32i_pkg::*; is deliberate: one shared package, six consumers.
+lint_off -rule IMPORTSTAR -file "*/alu.sv"
+lint_off -rule IMPORTSTAR -file "*/control.sv"
+lint_off -rule IMPORTSTAR -file "*/csr.sv"
+lint_off -rule IMPORTSTAR -file "*/imm_gen.sv"
+lint_off -rule IMPORTSTAR -file "*/branch_unit.sv"
+lint_off -rule IMPORTSTAR -file "*/lsu.sv"
+
+// csr_rdata_mem is latched for a future CSR-forwarding path, not read yet.
+lint_off -rule UNUSEDSIGNAL -file "*/cpu.sv" -match "*csr_rdata_mem*"
+
+// idx_of/tag_of intentionally slice disjoint bit ranges of pc; each function
+// only touches the bits it needs.
+lint_off -rule UNUSEDSIGNAL -file "*/branch_predictor.sv" -match "*'pc'*"
+
+// funct7 bit 5 and 6 are unused by RV32I base decode; kept for forward compat.
+lint_off -rule UNUSEDSIGNAL -file "*/control.sv" -match "*funct7*"
+
+// CAUSE_MISALIGNED_FETCH is declared ahead of the misaligned-fetch trap
+// implementation (tracked in the improvement plan, Phase 8).
+lint_off -rule UNUSEDPARAM -file "*/rv32i_pkg.sv" -match "*CAUSE_MISALIGNED_FETCH*"
+
+// clk/rst/req/burst/addr fold out of mem_timing at the default LATENCY=1
+// elaboration used for plain `make lint`; they're live at LATENCY>1.
+lint_off -rule UNUSEDSIGNAL -file "*/mem_timing.sv"
+
+// csr_read_only(addr) intentionally only inspects addr[11:10]; the standard
+// RISC-V read-only-CSR convention.
+lint_off -rule UNUSEDSIGNAL -file "*/rv32i_pkg.sv" -match "*'addr'*"

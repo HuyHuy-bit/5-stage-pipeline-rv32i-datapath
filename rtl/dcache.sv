@@ -314,6 +314,45 @@ module dcache #(
             endcase
         end
     end
+
+`ifdef VERILATOR
+    // Every state, every legal transition, and hit/miss/dirty-evict crossed
+    // with load/store. cover property is the supported stand-in for a
+    // covergroup on this toolchain (see cpu.sv for the same note).
+    c_state_idle:  cover property (@(posedge clk) disable iff (rst) state == S_IDLE);
+    c_state_wb:    cover property (@(posedge clk) disable iff (rst) state == S_WB);
+    c_state_fill:  cover property (@(posedge clk) disable iff (rst) state == S_FILL);
+    c_state_flush: cover property (@(posedge clk) disable iff (rst) state == S_FLUSH);
+
+    c_hit_load:  cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE && req && line_present && !is_store);
+    c_hit_store: cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE && req && line_present && is_store);
+    c_miss_load: cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE && req && !line_present && !is_store);
+    c_miss_store_alloc: cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE && req && !line_present && is_store && !wt_store);
+    c_dirty_evict: cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE && req && !line_present
+        && (WRITE_BACK != 0) && vld[victim[idx]][idx] && drty[victim[idx]][idx]);
+
+    c_trans_idle_to_wb:    cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE ##1 state == S_WB);
+    c_trans_idle_to_fill:  cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE ##1 state == S_FILL);
+    c_trans_idle_to_flush: cover property (@(posedge clk) disable iff (rst)
+        state == S_IDLE ##1 state == S_FLUSH);
+    c_trans_wb_to_fill:    cover property (@(posedge clk) disable iff (rst)
+        state == S_WB ##1 state == S_FILL);
+    c_trans_wb_to_flush:   cover property (@(posedge clk) disable iff (rst)
+        state == S_WB ##1 state == S_FLUSH);
+    c_trans_flush_to_wb:   cover property (@(posedge clk) disable iff (rst)
+        state == S_FLUSH ##1 state == S_WB);
+    c_trans_fill_to_idle:  cover property (@(posedge clk) disable iff (rst)
+        state == S_FILL ##1 state == S_IDLE);
+    c_trans_flush_to_idle: cover property (@(posedge clk) disable iff (rst)
+        state == S_FLUSH ##1 state == S_IDLE);
+`endif
 endmodule
 
 `default_nettype wire

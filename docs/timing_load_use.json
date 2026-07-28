@@ -1,0 +1,14 @@
+{
+  "signal": [
+    { "name": "clk",     "wave": "p......." },
+    { "name": "IF",      "wave": "x3456777", "data": ["lw","add","xor",".","." ] },
+    { "name": "ID",      "wave": "x.34*677", "data": ["lw","add","(bubble)","xor","."] },
+    { "name": "EX",      "wave": "x..3*467", "data": ["lw","(bubble)","add","xor"] },
+    { "name": "MEM",     "wave": "x...3*46", "data": ["lw","(bubble)","add","xor"] },
+    { "name": "WB",      "wave": "x....3*4", "data": ["lw","(bubble)","add"] },
+    { "name": "stall",   "wave": "0..10..." },
+    { "name": "bubble->ID/EX", "wave": "0..10..." }
+  ],
+  "head": { "text": "Load-use stall: hazard_detect holds IF/PC and IF/ID, injects one bubble into ID/EX" },
+  "config": { "hscale": 1.3 }
+}

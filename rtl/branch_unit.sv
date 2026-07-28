@@ -1,5 +1,7 @@
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module branch_unit (
     input logic [31:0] rs1,
     input logic [31:0] rs2,
@@ -10,13 +12,13 @@ module branch_unit (
     logic branch_taken;
     always_comb begin
         case (funct3)
-            3'b000: branch_taken = (rs1 == rs2); // BEQ
-            3'b001: branch_taken = (rs1 != rs2); // BNE
-            3'b100: branch_taken = ($signed(rs1) < $signed(rs2)); // BLT
-            3'b101: branch_taken = ($signed(rs1) >= $signed(rs2)); // BGE
-            3'b110: branch_taken = (rs1 < rs2); // BLTU
-            3'b111: branch_taken = (rs1 >= rs2); // BGEU
-            default: branch_taken = 1'b0; // Default case
+            F3_BEQ:  branch_taken = (rs1 == rs2);
+            F3_BNE:  branch_taken = (rs1 != rs2);
+            F3_BLT:  branch_taken = ($signed(rs1) < $signed(rs2));
+            F3_BGE:  branch_taken = ($signed(rs1) >= $signed(rs2));
+            F3_BLTU: branch_taken = (rs1 < rs2);
+            F3_BGEU: branch_taken = (rs1 >= rs2);
+            default: branch_taken = 1'b0; // FENCE, or any other funct3 reaching here
         endcase
     end
     assign pc_sel = branch & branch_taken;
