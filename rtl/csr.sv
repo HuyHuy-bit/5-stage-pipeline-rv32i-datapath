@@ -27,9 +27,58 @@ module csr (
 
     // ---- MRET (asserted for one cycle when an MRET commits) ----
     input  var logic        mret_en,
-    output var logic [XLEN-1:0] mepc_out      // return address -> PC redirect target
+    output var logic [XLEN-1:0] mepc_out,     // return address -> PC redirect target
+
+    // ---- interrupts ----
+    // irq_pending is the architectural "an interrupt is ready to be taken"
+    // condition: enabled globally (mstatus.MIE), enabled individually (mie),
+    // and actually asserted (mip). The commit point decides *when* to act on
+    // it; this module only says whether it is true.
+    // No "acknowledge" input: MTIP is a live comparison cleared by writing
+    // mtimecmp, and MSIP is set and cleared by software through mip. Neither
+    // needs the commit point to tell it the interrupt was taken.
+    output var logic        irq_pending,
+    output var logic [XLEN-1:0] irq_cause
 );
     logic [XLEN-1:0] mtvec, mepc, mcause, mscratch, mtval;
+
+    // mstatus: only MIE/MPIE/MPP are implemented. MPP is hardwired to M
+    // (2'b11) because this core has no U mode to return to.
+    logic mstatus_mie, mstatus_mpie;
+    logic [XLEN-1:0] mstatus_val;
+    always_comb begin
+        mstatus_val = XLEN'(0);
+        mstatus_val[MSTATUS_MIE_BIT]           = mstatus_mie;
+        mstatus_val[MSTATUS_MPIE_BIT]          = mstatus_mpie;
+        mstatus_val[MSTATUS_MPP_LSB +: 2]      = 2'b11;   // MPP = M, always
+    end
+
+    // mie / mip. Only software and timer are implemented; the external bit
+    // reads 0 because nothing drives it.
+    logic mie_msie, mie_mtie;
+    logic mip_msip;                 // software interrupt: set by software
+    logic [XLEN-1:0] mie_val, mip_val;
+
+    // Timer. mtime free-runs; MTIP is a comparison, not a stored bit, exactly
+    // as the spec defines it - which is why writing mtimecmp is what clears
+    // the interrupt, and there is no "acknowledge" path.
+    logic [63:0] mtime, mtimecmp;
+    logic mip_mtip;
+    assign mip_mtip = (mtime >= mtimecmp);
+
+    always_comb begin
+        mie_val = XLEN'(0);
+        mie_val[IRQ_S_BIT] = mie_msie;
+        mie_val[IRQ_T_BIT] = mie_mtie;
+        mip_val = XLEN'(0);
+        mip_val[IRQ_S_BIT] = mip_msip;
+        mip_val[IRQ_T_BIT] = mip_mtip;
+    end
+
+    // Timer interrupt outranks software when both are ready. Any fixed order
+    // is spec-legal; this one matches the usual RISC-V implementation.
+    assign irq_pending = mstatus_mie && ((mie_mtie && mip_mtip) || (mie_msie && mip_msip));
+    assign irq_cause   = (mie_mtie && mip_mtip) ? CAUSE_IRQ_TIMER : CAUSE_IRQ_SOFT;
     // mcycle/minstret are R/W in M-mode (software may reinitialize them); a
     // write here only offsets the live counter, no separate storage needed,
     // which keeps a write-then-read round trip trivial to reason about.
@@ -44,6 +93,11 @@ module csr (
     // ---- CSR read (combinational): old value seen by the CSR instruction ----
     always_comb begin
         case (csr_addr)
+            CSR_MSTATUS:   csr_rdata = mstatus_val;
+            CSR_MIE:       csr_rdata = mie_val;
+            CSR_MIP:       csr_rdata = mip_val;
+            CSR_MTIME:     csr_rdata = mtime[XLEN-1:0];
+            CSR_MTIMECMP:  csr_rdata = mtimecmp[XLEN-1:0];
             CSR_MTVEC:     csr_rdata = mtvec;
             CSR_MEPC:      csr_rdata = mepc;
             CSR_MCAUSE:    csr_rdata = mcause;
@@ -87,13 +141,31 @@ module csr (
             mtval           <= XLEN'(0);
             mcycle_offset   <= XLEN'(0);
             minstret_offset <= XLEN'(0);
-        end else if (trap_en) begin
+            mstatus_mie     <= 1'b0;      // interrupts off out of reset
+            mstatus_mpie    <= 1'b0;
+            mie_msie        <= 1'b0;
+            mie_mtie        <= 1'b0;
+            mip_msip        <= 1'b0;
+            mtime           <= 64'd0;
+            mtimecmp        <= '1;        // never fires until software sets it
+        end else begin
+            // mtime free-runs regardless of everything else below.
+            mtime <= mtime + 64'd1;
+
+        if (trap_en) begin
             mepc   <= trap_pc;
             mcause <= trap_cause;
             mtval  <= trap_val;
+            // Trap entry pushes the interrupt-enable stack: the handler runs
+            // with interrupts disabled, and MPIE remembers what MIE was so
+            // MRET can restore it. Without this an interrupt handler would be
+            // re-entered by its own cause before it could clear it.
+            mstatus_mpie <= mstatus_mie;
+            mstatus_mie  <= 1'b0;
         end else if (mret_en) begin
-            // MRET itself doesn't modify these regs in this minimal model
-            // (no mstatus.MPP/MPIE stack); flow restore is via mepc_out.
+            // ...and MRET pops it. MPIE is set to 1 on pop per the spec.
+            mstatus_mie  <= mstatus_mpie;
+            mstatus_mpie <= 1'b1;
         end else if (csr_access) begin
             // misa/mvendorid/marchid/mimpid/mhartid are WARL-zero (writes
             // silently dropped) or hardware read-only (structural
@@ -108,8 +180,22 @@ module csr (
                 CSR_MTVAL:    mtval    <= csr_new;
                 CSR_MCYCLE:   mcycle_offset   <= csr_new - cycle_count;
                 CSR_MINSTRET: minstret_offset <= csr_new - instret_count;
+                CSR_MSTATUS:  begin
+                    mstatus_mie  <= csr_new[MSTATUS_MIE_BIT];
+                    mstatus_mpie <= csr_new[MSTATUS_MPIE_BIT];
+                end
+                CSR_MIE: begin
+                    mie_msie <= csr_new[IRQ_S_BIT];
+                    mie_mtie <= csr_new[IRQ_T_BIT];
+                end
+                // MTIP is a comparison and so is read-only; MSIP is the one
+                // interrupt software raises and clears directly.
+                CSR_MIP:      mip_msip <= csr_new[IRQ_S_BIT];
+                // Writing mtimecmp is what acknowledges a timer interrupt.
+                CSR_MTIMECMP: mtimecmp <= 64'(csr_new);
                 default:      ; // misa, mvendorid/marchid/mimpid/mhartid: read-only
             endcase
+        end
         end
     end
 endmodule

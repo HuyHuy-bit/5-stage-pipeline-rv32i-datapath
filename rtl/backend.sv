@@ -431,7 +431,10 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // in-flight non-retired instruction, so acting here gives precise
     // exceptions for free: everything ahead has committed, everything behind
     // gets flushed.
-    logic        trap_take;       // a trap fires this cycle
+    logic        trap_take;       // a synchronous trap fires this cycle
+    logic        irq_take;        // an asynchronous interrupt is taken this cycle
+    logic        irq_pending;
+    logic [XLEN-1:0] irq_cause;
     logic [XLEN-1:0] trap_cause_w;
     logic [XLEN-1:0] trap_val_w;      // -> mtval: faulting address or instruction, if any
     logic        mret_take;       // an MRET commits this cycle
@@ -448,6 +451,7 @@ ex_mem_t ex_mem_d, ex_mem_q;
         trap_val_w   = XLEN'(0);
         mret_take    = 1'b0;
         csr_commit   = 1'b0;
+        irq_take     = 1'b0;
 
         // !pipe_stall: an instruction sitting in MEM across a memory stall is
         // presented to this block every one of those cycles. Committing only on
@@ -477,9 +481,29 @@ ex_mem_t ex_mem_d, ex_mem_q;
                 mret_take    = 1'b1;
             end else if (ex_mem_q.is_csr) begin
                 csr_commit   = 1'b1;
+            end else if (irq_pending) begin
+                // Lowest priority, and deliberately only on a "plain"
+                // instruction. An interrupt is level-held, so deferring it a
+                // cycle costs nothing - whereas taking it alongside a CSR
+                // write or an MRET would drop that instruction's effect,
+                // because mepc points at the *next* instruction (see below)
+                // and it would never be re-executed.
+                irq_take = 1'b1;
             end
         end
     end
+
+    // Interrupts are taken between instructions: the one in MEM completes
+    // normally and mepc points at its successor. Synchronous traps are the
+    // opposite - the faulting instruction is annulled and mepc points at it,
+    // so it re-executes after the handler returns.
+    //
+    // This is why reg_write_en_mem_gated below is gated on trap_take and NOT
+    // on irq_take: suppressing the register write while resuming at pc+4
+    // would silently drop the instruction's result.
+    logic [XLEN-1:0] trap_pc_w, trap_cause_final;
+    assign trap_pc_w       = irq_take ? ex_mem_q.pc_plus4 : ex_mem_q.pc;
+    assign trap_cause_final = irq_take ? irq_cause : trap_cause_w;
 
     logic [XLEN-1:0] mtvec_val, mepc_val, csr_rdata_commit;
     csr u_csr (
@@ -490,18 +514,19 @@ ex_mem_t ex_mem_d, ex_mem_q;
         .csr_wdata(ex_mem_q.csr_wdata),
         .csr_rdata(csr_rdata_commit),   // old CSR value -> write-back to rd
         .cycle_count(perf_cycle_count), .instret_count(perf_instr_retired),
-        .trap_en(trap_take),
-        .trap_pc(ex_mem_q.pc),
-        .trap_cause(trap_cause_w),
+        .trap_en(trap_take || irq_take),
+        .trap_pc(trap_pc_w),
+        .trap_cause(trap_cause_final),
         .trap_val(trap_val_w),
         .mtvec_out(mtvec_val),
         .mret_en(mret_take),
-        .mepc_out(mepc_val)
+        .mepc_out(mepc_val),
+        .irq_pending(irq_pending), .irq_cause(irq_cause)
     );
 
     // Trap/MRET redirect target computed here; signals declared near IF.
-    assign trap_redirect = trap_take || mret_take;
-    assign trap_target   = trap_take ? mtvec_val : mepc_val;
+    assign trap_redirect = trap_take || mret_take || irq_take;
+    assign trap_target   = (trap_take || irq_take) ? mtvec_val : mepc_val;
 
     // For a committing CSR instruction, the value written back to rd is the
     // OLD csr value. We fold it into the MEM-stage alu_result feeding MEM/WB,

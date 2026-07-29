@@ -4,7 +4,7 @@
     csrrw x0, mtvec, x1    # mtvec = handler
 
     addi  x4, x0, 99       # marker: reached before the fault
-    csrrs x2, 0x7c0, x0    # read of an unimplemented CSR -> illegal -> trap
+    csrrs x2, 0x3a0, x0    # pmpcfg0: genuinely unimplemented -> illegal -> trap
     addi  x4, x0, 7        # wrong-path: squashed
 
 handler:

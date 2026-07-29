@@ -97,7 +97,19 @@ package rv32i_pkg;
     localparam logic [ILEN-1:0] INSTR_MRET   = 32'h30200073;
 
     // ---- CSR addresses (instr[31:20]) - minimal M-mode set ----
+    localparam logic [11:0] CSR_MSTATUS   = 12'h300;
+    localparam logic [11:0] CSR_MIE       = 12'h304;
     localparam logic [11:0] CSR_MTVEC     = 12'h305;
+    localparam logic [11:0] CSR_MIP       = 12'h344;
+
+    // mtime/mtimecmp are memory-mapped devices in the privileged spec, not
+    // CSRs. This core has no MMIO fabric, so they live in the custom M-mode
+    // CSR space (0x7C0-0x7FF) instead. That is a deliberate, documented
+    // deviation: the interrupt *architecture* is spec-conformant, only the
+    // timer's discovery mechanism is not. Software written for a real CLINT
+    // would need its two accessors changed and nothing else.
+    localparam logic [11:0] CSR_MTIMECMP  = 12'h7C0;
+    localparam logic [11:0] CSR_MTIME     = 12'h7C1;
     localparam logic [11:0] CSR_MEPC      = 12'h341;
     localparam logic [11:0] CSR_MCAUSE    = 12'h342;
     localparam logic [11:0] CSR_MSCRATCH  = 12'h340;
@@ -116,6 +128,24 @@ package rv32i_pkg;
     // extensions implemented.
     localparam logic [XLEN-1:0] MISA_VALUE = XLEN'('h4000_0100);
 
+    // ---- mstatus / mie / mip bit positions ----
+    localparam int MSTATUS_MIE_BIT  = 3;
+    localparam int MSTATUS_MPIE_BIT = 7;
+    localparam int MSTATUS_MPP_LSB  = 11;   // 2 bits [12:11]
+
+    // Software and timer only. There is no external-interrupt bit because
+    // nothing would drive it - a declared-but-unused IRQ_E_BIT would be
+    // exactly the kind of dead constant that makes a spec gap look like
+    // an oversight rather than a scoping decision.
+    localparam int IRQ_S_BIT = 3;   // software
+    localparam int IRQ_T_BIT = 7;   // timer
+
+    // ---- Interrupt cause codes (mcause, interrupt bit = 1) ----
+    // The MSB of mcause distinguishes an interrupt from an exception; the low
+    // bits carry the same numbering as the mie/mip bit positions.
+    localparam logic [XLEN-1:0] CAUSE_IRQ_SOFT  = {1'b1, {(XLEN-1){1'b0}}} | XLEN'(IRQ_S_BIT);
+    localparam logic [XLEN-1:0] CAUSE_IRQ_TIMER = {1'b1, {(XLEN-1){1'b0}}} | XLEN'(IRQ_T_BIT);
+
     // ---- Exception cause codes (mcause, interrupt bit = 0) ----
     localparam logic [XLEN-1:0] CAUSE_MISALIGNED_FETCH = XLEN'(0);
     localparam logic [XLEN-1:0] CAUSE_ILLEGAL_INSTR    = XLEN'(2);
@@ -129,6 +159,7 @@ package rv32i_pkg;
     // (csr.sv) — one list instead of two that can drift apart.
     function automatic logic csr_implemented(input logic [11:0] addr);
         case (addr)
+            CSR_MSTATUS, CSR_MIE, CSR_MIP, CSR_MTIMECMP, CSR_MTIME,
             CSR_MTVEC, CSR_MEPC, CSR_MCAUSE, CSR_MSCRATCH, CSR_MTVAL, CSR_MISA,
             CSR_MVENDORID, CSR_MARCHID, CSR_MIMPID, CSR_MHARTID,
             CSR_MCYCLE, CSR_MINSTRET, CSR_MCYCLEH, CSR_MINSTRETH:
