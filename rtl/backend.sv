@@ -617,7 +617,6 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // elsewhere in this file; this is that same reasoning made falsifiable.
     // Simulation-only: SVA isn't synthesized, and not every tool ignores it
     // silently the way Verilator's --lint-only does.
-`ifndef SYNTHESIS
 
     // -- control-flow / redirect --
     a_trap_mret_excl: assert property (@(posedge clk) disable iff (rst)
@@ -643,8 +642,48 @@ ex_mem_t ex_mem_d, ex_mem_q;
         id_ex_q.rs1_addr == 5'd0 |-> forward_a == 2'b00);
     a_fwd_b_no_x0: assert property (@(posedge clk) disable iff (rst)
         id_ex_q.rs2_addr == 5'd0 |-> forward_b == 2'b00);
-`endif // SYNTHESIS
+
+    // -- interrupts (Phase 8) --
+    // An interrupt and a synchronous trap must never commit together: they
+    // write mepc/mcause from different sources, so both firing would corrupt
+    // whichever lost.
+    a_irq_exc_excl: assert property (@(posedge clk) disable iff (rst)
+        !(irq_take && trap_take));
+    a_irq_mret_excl: assert property (@(posedge clk) disable iff (rst)
+        !(irq_take && mret_take));
+    // An interrupt is only ever taken with interrupts globally enabled.
+    a_irq_needs_mie: assert property (@(posedge clk) disable iff (rst)
+        irq_take |-> irq_pending);
+    // Taking an interrupt must disable them, or the handler re-enters itself.
+    a_irq_disables_mie: assert property (@(posedge clk) disable iff (rst)
+        irq_take |=> !u_csr.mstatus_mie);
+    // An interrupt resumes at the *next* instruction, a trap re-runs the
+    // faulting one. Getting these backwards silently drops or repeats work.
+    a_irq_mepc_is_next: assert property (@(posedge clk) disable iff (rst)
+        irq_take |-> (trap_pc_w == ex_mem_q.pc_plus4));
+    a_trap_mepc_is_faulting: assert property (@(posedge clk) disable iff (rst)
+        trap_take |-> (trap_pc_w == ex_mem_q.pc));
+    // An interrupt lets the instruction in MEM complete; only a synchronous
+    // trap annuls its register write.
+    a_irq_preserves_write: assert property (@(posedge clk) disable iff (rst)
+        (irq_take && ex_mem_q.reg_write_en) |-> reg_write_en_mem_gated);
+    // mcause carries the interrupt bit for interrupts and not for traps.
+    a_irq_cause_bit: assert property (@(posedge clk) disable iff (rst)
+        irq_take |-> trap_cause_final[XLEN-1]);
+    a_exc_cause_bit: assert property (@(posedge clk) disable iff (rst)
+        trap_take |-> !trap_cause_final[XLEN-1]);
+    // Any redirect out of the commit point is one of exactly three causes.
+    a_redirect_accounted: assert property (@(posedge clk) disable iff (rst)
+        trap_redirect |-> (trap_take || mret_take || irq_take));
+    // A bubble never commits anything at the commit point.
+    a_bubble_no_commit: assert property (@(posedge clk) disable iff (rst)
+        !ex_mem_q.valid |-> !(trap_take || mret_take || irq_take || csr_commit));
+    // The commit point is single-issue: at most one action per cycle.
+    a_commit_onehot: assert property (@(posedge clk) disable iff (rst)
+        $onehot0({trap_take, mret_take, irq_take, csr_commit}));
+
 `endif
+
     // ---- Functional coverage ----
     // SystemVerilog covergroups aren't supported by this toolchain (COVERIGN);
     // cover property is the supported equivalent and feeds the same
