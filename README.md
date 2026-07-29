@@ -17,9 +17,10 @@ Next-PC priority: `freeze > trap > mispredict > load-use stall > predict > +4`. 
 | **Hazards** | EX/MEM + MEM/WB forwarding; 1-cycle stall on load-use |
 | **Branch prediction** | 64-entry BTB + 2-bit saturating counters, resolved in EX (2-cycle penalty) |
 | **Exceptions** | Precise, single commit point in MEM. Illegal instruction, misaligned load/store/fetch, `ECALL`/`EBREAK`, `MRET`, illegal CSR access |
-| **CSRs** | `mtvec` `mepc` `mcause` `mscratch` `mtval` `misa` `mvendorid` `marchid` `mimpid` `mhartid` `mcycle` `minstret` |
+| **CSRs** | `mstatus` `mie` `mip` `mtvec` `mepc` `mcause` `mscratch` `mtval` `misa` `mvendorid` `marchid` `mimpid` `mhartid` `mcycle` `minstret` |
 | **Caches** | Parameterised I$ and D$ — capacity, block size, associativity, write-through/no-allocate or write-back/write-allocate |
-| **Not implemented** | Interrupts, `mstatus`, `FENCE.I`, any extension beyond base I |
+| **Interrupts** | `mstatus` MIE/MPIE/MPP stack, `mie`/`mip`, timer (`mtime`/`mtimecmp`) and software interrupts |
+| **Not implemented** | `FENCE.I`, external interrupts, any extension beyond base I |
 
 ## Synthesis
 
@@ -60,11 +61,12 @@ Three findings from the geometry sweeps (measured pre-BRAM-rework; the qualitati
 
 | Mechanism | Coverage |
 |---|---|
-| Directed tests | 15, one per hazard/instruction-class/trap scenario |
+| Directed tests | 19, one per hazard/instruction-class/trap scenario; `tohost` end-of-test |
 | Compliance | `riscv-arch-test` `rv32i_m/I` — **38/38** |
+| Spike lockstep | Same 38, compared instruction-by-instruction — **38/38** |
 | CI matrix | Directed suite × 6 cache/latency configs per push; result must be invariant to cache config |
-| Assertions | 13 SVA properties, live in every build via `--assert` |
-| Functional coverage | 38 cover points, 25 hit (65.8%) — [`docs/coverage.md`](docs/coverage.md) |
+| Assertions | 25 SVA properties, live in every build via `--assert` |
+| Functional coverage | 38 cover points, 33 hit (86.8%) — [`docs/coverage.md`](docs/coverage.md) |
 | Constrained-random | 1000 seeds vs. a Python reference model, ALU/load-store subset |
 | Lint | `verilator -Wall` clean, waivers justified in [`rtl/verilator.vlt`](rtl/verilator.vlt) |
 
@@ -79,6 +81,7 @@ make all        # build + run directed tests (assertions live)
 make bench      # C kernels, CPI table
 make coverage   # functional coverage report
 make soak SEEDS=1000
+make lockstep    # compare against Spike instruction-by-instruction
 ```
 
 Cache geometry is a set of RTL parameters, so each configuration is its own build:
@@ -96,6 +99,7 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 - **The narrowest bugs are the easiest to miss and the most worth finding.** A same-cycle register-file write/read race, a CSR value that wasn't threaded through forwarding correctly, `FENCE` silently trapping as illegal — none of these fit the "adjacent instruction" mental model that motivates most hazard logic, and none of my own directed tests caught them until I specifically went looking.
 - **Precise exceptions are a control-flow discipline, not a checklist.** Getting `mepc`/`mcause` right is easy; making sure a trap can't corrupt or duplicate architectural state under speculation (a mispredicted branch, an in-flight load) is the actual work.
 - **Passing your own tests and being *correct* are different claims.** The compliance suite exists because directed tests, however careful, reflect the blind spots of whoever wrote them. Running against an external, independently-generated reference is what turns "I believe this works" into "this is verified."
+- **A test that ends by guessing isn't a test.** Runs used to stop when the PC stopped moving, which cannot tell "finished" from "spinning" or "stalled". Switching to a `tohost` store made termination deterministic — and immediately broke eight tests, because inserting those instructions shifted every trap handler they located by a hardcoded byte offset. The heuristic had been hiding how fragile the tests were.
 - **Simulation hides the cost of memory.** A combinational array read is free in Verilator and impossible in a Block RAM. Synthesis turned a "1.18 CPI" cache into a 2.3 CPI cache and a silent 3.2×-over-budget design into one that fits — neither fact was visible from any amount of simulation.
 
 ## Limitations
@@ -103,7 +107,6 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 - **fmax is a working number, not a good one.** ~76–79 MHz with zero timing optimization attempted: no retiming, no pipelining of the tag-compare/way-select path, no shortening of the redirect priority chain.
 - **The pipeline freezes globally on a memory stall** rather than letting the back end drain through a fetch miss. It inflates cached and uncached numbers alike, so it doesn't manufacture a speedup — but a decoupled front end would make the I-cache look less essential than it does here.
 - **The I-cache and backing memories still don't use Block RAM.** The D-cache pattern applies directly; not done because the I-cache already fit.
-- **No interrupts, no `mstatus`.** Synchronous exceptions are precise and tested; nothing asynchronous exists.
 - **No `FENCE.I`.** Split I$/D$ with no coherence, so self-modifying code can read stale instructions. No test or benchmark here does that.
 - **Random testing covers ALU/load-store only** — no branches, traps, or CSRs, because the Python reference model doesn't interpret them. Spike lockstep would close this.
 

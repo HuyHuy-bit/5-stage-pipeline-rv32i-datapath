@@ -2,54 +2,68 @@
 
 What's tested, by what mechanism, and what's explicitly not tested yet.
 
+| Mechanism | Scale | What it uniquely catches |
+|---|---|---|
+| Directed tests | 19 programs × 6 cache configs | The specific hazard/trap each was written for |
+| Compliance suite | 38/38 `rv32i_m/I` | ISA conformance the author wouldn't think to target |
+| Spike lockstep | 38 programs, instruction-by-instruction | Right answer reached by the *wrong path* |
+| SVA assertions | 25 properties, every cycle | Invariant violations, in any test, immediately |
+| Functional coverage | 33/38 points (86.8%) | Scenarios nothing exercises |
+| Constrained-random | 1000 seeds vs. a reference model | Blind spots of whoever wrote the directed tests |
+
 ## Directed tests (`tests/`, run via `make all`)
+
+19 hand-assembled programs, one per hazard/instruction-class/trap scenario: R-type, I-type, memory, branch, jump, LUI/AUIPC, load-use stall, loop, illegal instruction, misaligned load/store/fetch, MRET, CSR read/write, CSR permission traps, timer interrupt, MRET-from-interrupt, ECALL/EBREAK, and D-cache dirty eviction. Each checks final register state against a `.ref` file, across the 6-configuration cache matrix — the result must be identical in all 6, since cache configuration is not architecturally visible.
 
 Every test ends by storing to a reserved address (`tohost`, the riscv-tests convention); the run stops there and the stored value is the exit code. This replaced a `same_pc >= 6` heuristic that inferred completion from the PC not moving — which cannot distinguish "finished" from "spinning on a lock", "stalled on slow memory", or "stuck", and made every legitimately-looping test a guess. Completion is detected where the store *commits* rather than by watching memory, so it behaves identically with a write-back cache holding the value dirty.
 
-11 hand-assembled programs, one per hazard/instruction-class scenario (R-type, I-type, memory, branch, jump, LUI/AUIPC, load-use stall, loop, illegal-instruction trap, misaligned trap, MRET). Each checks final register state against a `.ref` file. Runs on every push, across the 6-configuration cache matrix in `.github/workflows/rtl-tests.yml` — the pass/fail result must be identical in all 6, since cache configuration is not supposed to be architecturally visible.
+Tests name their trap handler via a `la` pseudo-instruction rather than a hardcoded byte offset. That is not cosmetic: adding the `tohost` sequence shifted every handler label and broke eight tests at once, because they computed `mtvec` by counting instructions.
 
-**Catches:** instruction decode/execute bugs, the specific hazard each test targets, exception entry/exit for the cases named above.
-**Doesn't catch:** anything the test author didn't think to write a scenario for. Final-register-state comparison also can't distinguish "got the right answer via the wrong path" from "got the right answer" — a bug that's masked rather than avoided passes silently.
+**Catches:** decode/execute bugs, the specific hazard each test targets, trap entry/exit.
+**Doesn't catch:** anything the author didn't think to write. Final-state comparison also can't distinguish "right answer via the wrong path" from "right answer" — which is what lockstep below is for.
 
-## Compliance suite (`compliance/`, run via `run_compliance.sh`)
+## Compliance suite (`compliance/`)
 
-The official `riscv-arch-test` `rv32i_m/I` suite: 38 programs, independently written, each producing a signature dumped to memory and diffed word-for-word against a golden reference. Currently 38/38 passing. Runs in CI whenever `rtl/**` changes.
+The official `riscv-arch-test` `rv32i_m/I` suite: 38 independently-written programs, each dumping a signature diffed word-for-word against a golden reference. **38/38 passing.** Runs in CI whenever `rtl/**` changes.
 
-**Catches:** ISA-conformance bugs the directed suite's author (same person as the RTL author) wouldn't think to target — this is the point of using an external, independently-generated suite.
-**Doesn't catch:** anything outside the base integer ISA (no M/C/Zicsr-suite coverage), and like the directed tests, it's a final-state signature comparison, not an instruction-by-instruction trace check.
+**Catches:** ISA-conformance bugs the directed suite's author (same person as the RTL author) wouldn't target.
+**Doesn't catch:** anything outside base RV32I, and it is still a final-state comparison.
 
-## C benchmark kernels (`bench/`)
+## Spike lockstep (`make lockstep`)
 
-Five kernels (`crc32`, `matmul`, `sort`, `llist`, `interp`), each also compiled and run on the host; the RTL's result is compared against the host's. Not part of CI pass/fail today — used for performance measurement (see the README's Performance section), but a wrong answer does fail the run rather than silently skewing the CPI numbers.
+The same 38 compliance programs, re-linked for Spike's memory map and compared **retirement by retirement** — PC, instruction word, destination register, and written value. **38/38 match instruction-for-instruction** (`add-01` alone is 3,212 retirements).
 
-**Catches:** correctness bugs exercised by realistic, longer-running code paths that the short directed tests don't reach.
-**Doesn't catch:** anything not exercised by these five specific access/control-flow patterns.
+The RTL exposes an RVFI-style trace at WB (`rvfi_*` in `backend.sv`), simulation-only, so no pipeline register is widened to serve a debug consumer. `tools/lockstep.py` streams Spike's commit log and stops at the *first* divergence, printing both sides and the preceding retirements — a mismatch reported 400 instructions later is nearly useless.
 
-## SVA assertions (`rtl/cpu.sv`, `rtl/reg_file.sv`)
+Both machines run the *same ELF*. Spike reserves low memory, so `compliance/link/spike-lockstep.ld` relocates to `0x80000000`; the RTL's memories decode only their low address bits, so that image aliases back to the same words, and only the reset vector needs adjusting (`RESET_PC`).
 
-13 concurrent assertions, built into every simulator binary via `verilator --assert` and checked on every cycle of every test, directed and benchmark alike: trap/MRET mutual exclusion, frozen-PC stability under a memory stall, next-PC redirect priority (trap vs. mispredict), no request reaching memory with a pending exception, stall boundedness (scoped to exclude the testbench's own debug cache-flush hook, which is legitimately long-running), `x0` immutability, no bubble retiring, no register write on a trap, and forwarding priority/no-forward-through-x0.
+**Catches:** the "right answer via the wrong path" class — wrong forwarding masked by a dead value, a flush that squashes one instruction too many, a stale CSR read nobody observes. This is what made the Phase 7 refactor safe to attempt.
+**Doesn't catch:** anything outside the 38 programs; it is not yet wired to random stimulus.
 
-**Catches:** any RTL change that violates one of these invariants, in any test, immediately — including tests that would otherwise pass on final-state comparison alone. Two were found to be mis-specified during authoring (not RTL bugs): an x0-write check that didn't match how `reg_file.sv` actually guards the write, and a stall-bound check that didn't account for the debug flush path; both were corrected against the RTL's actual behavior, not the other way around.
-**Doesn't catch:** anything not already expressed as a property. The set above is representative, not exhaustive — CSR-specific and interrupt invariants are natural additions once Phase 8 lands interrupts.
+## SVA assertions
+
+**25 concurrent properties**, built into every simulator binary via `--assert`, checked on every cycle of every test and benchmark. Placed beside the logic they constrain: next-PC redirect priority in `frontend.sv`, forwarding/trap/interrupt invariants in `backend.sv`, `x0` immutability in `reg_file.sv`, stall-boundedness at the top level.
+
+The interrupt properties are the sharpest: an interrupt resumes at `pc+4` while a trap re-runs the faulting instruction, so `a_irq_mepc_is_next` and `a_trap_mepc_is_faulting` pin down both directions — getting them backwards silently drops or repeats work.
+
+**Catches:** any change violating an invariant, immediately, in any test.
+**Doesn't catch:** anything not expressed as a property. Three were found mis-specified during authoring (not RTL bugs) and corrected against the RTL's actual behaviour, not the reverse.
 
 ## Functional coverage (`make coverage`, `docs/coverage.md`)
 
-Verilator doesn't support SystemVerilog covergroups; `cover property` is the supported equivalent and feeds the same `--coverage` database. 38 cover points across forwarding-path crosses, predictor-outcome crosses, control-flow type, trap causes, and the full D-cache FSM (every state, every legal transition, hit/miss/dirty-evict crossed with load/store). Currently **25/38 (65.8%)** hit by the directed suite alone against a cache-enabled build.
+Verilator doesn't support covergroups; `cover property` is the supported equivalent. 38 points across forwarding crosses, predictor-outcome crosses, control-flow type, trap causes, and the full D-cache FSM. **33/38 (86.8%)** from the directed suite alone.
 
-**Catches:** silently-untested scenarios — "the directed suite exercises everything that matters" is now a number, not a claim.
-**Doesn't catch:** anything a cover point wasn't written for. The unhit list in `docs/coverage.md` is the actual to-do list: `ecall`/`ebreak` traps, a misaligned-load trap, a genuine predictor target mismatch, and a few D-cache transitions (idle→writeback, writeback→fill, flush→idle) aren't exercised by the 11 directed tests as they stand today — closing those is directed-test work, not infrastructure work.
+Each of the five remaining holes is annotated in `docs/coverage.md` with *why* it is still open — none is dead logic. They need either a BTB tag collision, a load-use/mispredict coincidence, or an indirect-jump target mismatch, all of which random stimulus reaches more naturally than a directed test.
 
-## Constrained-random regression (`make soak`, `tools/rand_gen.py`)
+## Constrained-random (`make soak`)
 
-Spike-based lockstep (the plan's original ask here) is blocked in this sandbox on installing Spike's build dependencies without root — see above. `tools/rv32i_model.py` is the pragmatic substitute: a ~90-line Python interpreter for the subset `tools/rand_gen.py` generates (R-type/I-type ALU ops, word loads/stores against a small aligned scratch region, no branches/jumps/traps/CSRs). `tools/rand_gen.py` emits raw instruction words plus a `.ref` computed by running the same words through the model, so a generated program plugs directly into the existing `+MEMFILE=`/`+REFFILE=` comparison the directed tests already use — no new comparison logic. Generation is biased toward dependency distance 1-2 (60% chance a source register is one of the last two destinations), since that's where forwarding and load-use bugs live.
+`tools/rand_gen.py` emits random ALU/load-store programs; `tools/rv32i_model.py` is a small Python reference model that computes the expected result. **1000 seeds pass clean** against both cacheless and cache-enabled builds.
 
-`make soak SEEDS=1000` (default 100) runs that many programs seed-by-seed; a failing seed prints the seed number and the paths to its program/expected/log for reproduction. 1000 seeds at 80 instructions each pass clean against both the cacheless default build and a cache-enabled one (4-way write-back D$, 4-way I$) in about 20 seconds.
-
-**Catches:** forwarding and load-use bugs in the ALU/load-store subset, independent of the directed suite's own blind spots — the same class of value the compliance suite provides, generalized past a fixed instruction list.
-**Doesn't catch:** anything involving branches, jumps, traps, interrupts, or CSRs (out of the model's scope — those stay covered by the directed suite, compliance suite, and assertions instead). This is real scope, not decoration: don't read "1000/1000 passed" as "the random suite verifies control flow," because it doesn't.
+**Doesn't catch:** branches, jumps, traps, interrupts, or CSRs — out of the model's scope. Don't read "1000/1000 passed" as "random testing verifies control flow". Pointing the generator at Spike instead of the Python model would remove this limit entirely and is the obvious next step.
 
 ## Not yet done
 
-- **Instruction-by-instruction lockstep against a golden model** (e.g. Spike) — would catch the "right answer via the wrong path" class of bug that final-state comparison structurally cannot, and would extend constrained-random coverage to the full ISA including control flow and traps. Largest single verification upgrade available; blocked in this environment on installing Spike's build dependencies (needs root).
-- **Synthesis / static timing** — none of the above says anything about whether the design closes timing; see the README's Notes section.
-- **mstatus / interrupts** — see the README's Notes section; no `mie`/`mip`/timer, so there's nothing here to test yet.
+- **Random stimulus through lockstep.** The generator and the Spike harness both exist but aren't connected; joining them would extend random coverage to the full ISA including control flow and traps.
+- **Interrupt testing under random stimulus.** Interrupts are covered by directed tests only.
+- **Formal.** The RVFI port makes a formal flow (e.g. riscv-formal) bindable, but none is set up.
+- **Timing closure.** Nothing here says whether the design meets timing; see the synthesis section of `docs/MICROARCHITECTURE.md`.
