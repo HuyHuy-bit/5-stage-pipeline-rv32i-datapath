@@ -1,11 +1,11 @@
 # t11_mret.s — full trap round-trip WITH return via MRET.
-    auipc x1, 0
-    addi  x1, x1, 28       # handler is 7 instructions ahead (7*4=28)
+    la    x1, handler      # mtvec = handler (label, not a byte count)
     csrrw x0, mtvec, x1    # mtvec = handler
 
     addi  x4, x0, 11       # before fault
     word  0x00000000       # ILLEGAL -> trap (mepc points here)
     addi  x4, x0, 55       # AFTER return: this must execute post-MRET
+    tohost                 # signal completion (exit code 1 = pass)
     halt                   # main program parks here
 
 handler:

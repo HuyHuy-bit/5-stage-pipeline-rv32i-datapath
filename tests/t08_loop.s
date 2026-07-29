@@ -10,4 +10,6 @@ loop:
 
 addi x7, x0, 42       # sentinel: reached after loop exit
 
+tohost          # signal completion (exit code 1 = pass)
+
 halt

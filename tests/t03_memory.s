@@ -23,4 +23,6 @@ addi x9,  x0, 100
 sw   x9,  12(x0)
 lw   x10, 12(x0)       # x10 = 100
 
+tohost          # signal completion (exit code 1 = pass)
+
 halt

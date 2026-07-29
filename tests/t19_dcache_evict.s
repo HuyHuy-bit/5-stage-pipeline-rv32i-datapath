@@ -28,4 +28,5 @@
     sw    x11, 0(x10)       # miss -> evict dirty victim -> WB then FILL
     lw    x12, 0(x10)       # read it back
     lw    x13, 0(x2)        # re-load an evicted line: miss-on-load + refill
+    tohost          # signal completion (exit code 1 = pass)
     halt

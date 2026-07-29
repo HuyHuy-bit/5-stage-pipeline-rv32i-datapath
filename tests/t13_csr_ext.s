@@ -11,4 +11,5 @@
     # read but deliberately not checked against a fixed expected value in
     # the .ref file — the CI matrix requires results invariant to config.
     csrrs  x5, mcycle, x0
+    tohost          # signal completion (exit code 1 = pass)
     halt

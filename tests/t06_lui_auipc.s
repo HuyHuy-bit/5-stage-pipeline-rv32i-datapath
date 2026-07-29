@@ -15,4 +15,6 @@ auipc x4, 0
 auipc x5, 1
 sub   x6, x5, x4
 
+tohost          # signal completion (exit code 1 = pass)
+
 halt

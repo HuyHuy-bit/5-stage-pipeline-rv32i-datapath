@@ -6,6 +6,13 @@
 
 package rv32i_pkg;
 
+    // ---- Test-completion (riscv-tests "tohost" convention) ----
+    // A store to this address ends a simulation run; the stored value is the
+    // exit code (1 = pass, (n<<1)|1 = fail n). Placed near the top of the 64KB
+    // data memory so it cannot collide with the low addresses the directed
+    // tests use as scratch. Simulation-only - nothing in the RTL reacts to it.
+    localparam logic [31:0] TOHOST_ADDR = 32'h0000_FFF0;
+
     // ---- Widths ----
     // XLEN is the datapath width: registers, PC, addresses, ALU operands,
     // immediates, CSRs. Changing it here changes all of them.

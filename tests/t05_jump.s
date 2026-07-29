@@ -25,4 +25,6 @@ addi  x6,  x0, 99
 jalr_t:
 addi  x7,  x0, 77
 
+tohost          # signal completion (exit code 1 = pass)
+
 halt

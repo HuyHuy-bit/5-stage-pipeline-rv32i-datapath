@@ -4,6 +4,8 @@ What's tested, by what mechanism, and what's explicitly not tested yet.
 
 ## Directed tests (`tests/`, run via `make all`)
 
+Every test ends by storing to a reserved address (`tohost`, the riscv-tests convention); the run stops there and the stored value is the exit code. This replaced a `same_pc >= 6` heuristic that inferred completion from the PC not moving — which cannot distinguish "finished" from "spinning on a lock", "stalled on slow memory", or "stuck", and made every legitimately-looping test a guess. Completion is detected where the store *commits* rather than by watching memory, so it behaves identically with a write-back cache holding the value dirty.
+
 11 hand-assembled programs, one per hazard/instruction-class scenario (R-type, I-type, memory, branch, jump, LUI/AUIPC, load-use stall, loop, illegal-instruction trap, misaligned trap, MRET). Each checks final register state against a `.ref` file. Runs on every push, across the 6-configuration cache matrix in `.github/workflows/rtl-tests.yml` — the pass/fail result must be identical in all 6, since cache configuration is not supposed to be architecturally visible.
 
 **Catches:** instruction decode/execute bugs, the specific hazard each test targets, exception entry/exit for the cases named above.

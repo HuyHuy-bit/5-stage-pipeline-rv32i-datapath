@@ -1,8 +1,7 @@
 # t16_irq_timer.s — a timer interrupt fires during a loop and returns correctly.
 # Proves: mtimecmp arms MTIP, mstatus.MIE gates it, the handler runs, MRET
 # resumes the interrupted code, and mcause carries the interrupt bit.
-    auipc x1, 0
-    addi  x1, x1, 48        # handler is 12 instructions ahead (12*4=48)
+    la    x1, handler      # mtvec = handler (label, not a byte count)
     csrrw x0, mtvec, x1
 
     addi  x2, x0, 20        # arm the timer a short way out
@@ -25,4 +24,5 @@ handler:
     srli  x8, x8, 1
     csrrw x0, mtimecmp, x8
     csrrs x9, mstatus, x0   # x9 = mstatus inside handler: MIE must be 0
+    tohost          # signal completion (exit code 1 = pass)
     halt

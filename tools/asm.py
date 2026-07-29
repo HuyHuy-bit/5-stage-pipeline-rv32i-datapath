@@ -36,6 +36,13 @@ def assemble(src):
     def CSR_NUM(s):
         s=s.strip().lower()
         return CSRS[s] if s in CSRS else (int(s,0)&0xFFF)
+    # Pseudo-instructions that expand to more than one word. The label pass
+    # has to know their true size or every label after one of them shifts -
+    # which is exactly the bug that hardcoded handler offsets used to hide.
+    SIZES={'la':2,'tohost':4}
+    def op_words(line):
+        return SIZES.get(re.split(r'[\s,()]+',line)[0].lower(), 1)
+
     labels={}; instrs=[]; addr=0
     for line in src.splitlines():
         line=line.split('#')[0].strip()
@@ -45,7 +52,7 @@ def assemble(src):
             labels[m.group(1)]=addr
             line=m.group(2).strip()
             if not line: continue
-        instrs.append((addr,line)); addr+=4
+        instrs.append((addr,line)); addr+=4*op_words(line)
 
     words=[]
     for pc,line in instrs:
@@ -96,6 +103,21 @@ def assemble(src):
         elif op=='jal':   words.append(j_type(p[1],iv(p[2])))
         elif op=='nop':   words.append(0x00000013)
         elif op=='halt':  words.append(0x0000006F)  # jal x0, 0 -> infinite self-loop
+        elif op=='la':
+            # la rd, label -> auipc rd, 0 ; addi rd, rd, (label - pc_of_auipc)
+            # Lets a test name its handler instead of counting bytes to it.
+            words.append(u_type(p[1],0,0x17))
+            words.append(i_type(p[1],p[1],(labels[p[2]]-pc)&0xFFF,0,0x13))
+        elif op=='tohost':
+            # `tohost` / `tohost N` - signal test completion with exit code N
+            # (default 1 = pass), per the riscv-tests convention. Expands to
+            # two instructions: materialise the address, then store the code.
+            # x31 is used as scratch; no directed test relies on it.
+            code = int(p[1],0) if len(p)>1 else 1
+            words.append(i_type('x31','x0',code,0,0x13))          # addi x31, x0, code
+            words.append(u_type('x30',0x10,0x37))                 # lui  x30, 0x10  -> 0x10000
+            words.append(i_type('x30','x30',-16,0,0x13))          # addi x30, x30, -16 -> 0xFFF0
+            words.append(s_type('x30','x31',0,2))                 # sw   x31, 0(x30)
         elif op=='ret':   words.append(i_type('x0','x1',0,0,0x67))
         elif op=='ecall':  words.append(0x00000073)
         elif op=='ebreak': words.append(0x00100073)

@@ -17,4 +17,6 @@ sll  x10, x1, x20      # 5<<1=10
 srl  x11, x1, x20      # 5>>1=2  (logical)
 sra  x12, x21, x20     # -8>>1=-4=0xFFFFFFFC (arithmetic)
 
+tohost                 # signal completion (exit code 1 = pass)
+
 halt                  # park here so we never fetch past the program

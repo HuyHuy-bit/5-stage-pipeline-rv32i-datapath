@@ -600,6 +600,18 @@ ex_mem_t ex_mem_d, ex_mem_q;
         end
     end
 
+    // ---- Test completion ----
+    // Detected where the store *commits*, not by watching data_mem: with a
+    // write-back cache the value can sit dirty in the cache indefinitely, so
+    // a memory-side watcher would miss it or see it late. This fires on the
+    // same cycle the store is architecturally performed, for every cache
+    // configuration.
+    logic            tohost_valid /* verilator public_flat_rd */;
+    logic [XLEN-1:0] tohost_data  /* verilator public_flat_rd */;
+    assign tohost_valid = ex_mem_q.valid && !pipe_stall && ex_mem_q.mem_write
+                          && (ex_mem_q.alu_result == XLEN'(TOHOST_ADDR));
+    assign tohost_data  = ex_mem_q.rs2_data;
+
     // One retirement per asserted cycle. Gated on !pipe_stall for the same
     // reason perf_instr_retired is: a frozen pipeline re-presents the same
     // instruction to WB every cycle, and an ungated valid would trace it once

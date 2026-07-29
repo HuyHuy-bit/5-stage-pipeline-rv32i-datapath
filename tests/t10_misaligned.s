@@ -1,6 +1,5 @@
 # t10_misaligned.s — misaligned store trap.
-    auipc x1, 0
-    addi  x1, x1, 32       # handler is 8 instructions ahead (8*4=32)
+    la    x1, handler      # mtvec = handler (label, not a byte count)
     csrrw x0, mtvec, x1    # mtvec = handler
 
     addi  x2, x0, 100      # a value to store
@@ -13,4 +12,5 @@ handler:
     addi  x5, x0, 1        # reached handler
     csrrs x6, mcause, x0   # x6 = mcause (should be 6 = store misaligned)
     csrrs x7, mepc,   x0   # x7 = mepc (faulting PC)
+    tohost          # signal completion (exit code 1 = pass)
     halt

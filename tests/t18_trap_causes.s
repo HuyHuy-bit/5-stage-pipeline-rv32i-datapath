@@ -3,14 +3,14 @@
 # earlier directed tests left unhit (t10 covers the misaligned *store* only).
 # x6 accumulates each mcause, so a single value proves all three fired:
 # 11 (ECALL) + 3 (EBREAK) + 4 (misaligned load) = 18.
-    auipc x1, 0
-    addi  x1, x1, 32        # handler is 8 instructions ahead
+    la    x1, handler      # mtvec = handler (label, not a byte count)
     csrrw x0, mtvec, x1
 
     ecall                   # cause 11
     ebreak                  # cause 3
     lh    x4, 1(x0)         # addr 1 is odd -> misaligned load -> cause 4
     addi  x9, x0, 99        # marker: all three traps returned here
+    tohost          # signal completion (exit code 1 = pass)
     halt
 
 handler:

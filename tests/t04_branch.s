@@ -43,4 +43,6 @@ bgeu_t:
 
 addi x7, x0, 99        # success marker
 
+tohost          # signal completion (exit code 1 = pass)
+
 halt

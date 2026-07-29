@@ -87,6 +87,13 @@ int main(int argc, char** argv) {
     top->rst = 1; tick(); top->rst = 0;
 
     const int timeout = (cycles > 0 ? cycles : 20) * 50 + 1000;
+    // tohost is the authoritative end-of-test signal: a store to a reserved
+    // address, exactly the riscv-tests convention. The PC-parked heuristic
+    // below is kept only as a fallback for programs that never signal, and
+    // reports when it had to be used - a run that ends by heuristic is a run
+    // whose termination nobody actually specified.
+    bool     saw_tohost   = false;
+    uint32_t tohost_code  = 0;
     uint32_t prev_pc       = 0xFFFFFFFF;
     uint32_t prev_memstall = 0;
     int      same_pc = 0;
@@ -103,6 +110,12 @@ int main(int argc, char** argv) {
                                 (uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_insn,
                                 (uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_rd_addr,
                                 (uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_rd_wdata});
+        }
+
+        if (top->rootp->cpu__DOT__u_backend__DOT__tohost_valid) {
+            saw_tohost  = true;
+            tohost_code = top->rootp->cpu__DOT__u_backend__DOT__tohost_data;
+            break;
         }
 
         // A frozen pipeline holds the PC by design, so a memory stall looks
@@ -172,7 +185,14 @@ int main(int argc, char** argv) {
         regs[i] = top->rootp->cpu__DOT__u_backend__DOT__u_reg_file__DOT__reg_array[i];
 
     // Print register snapshot (non-zero registers only).
-    std::cout << "Registers after " << ran << " cycles (ran until PC parked):\n";
+    if (saw_tohost) {
+        std::cout << "Test signalled completion via tohost: code=0x"
+                  << std::hex << tohost_code << std::dec
+                  << (tohost_code == 1 ? " (pass)" : " (fail)") << "\n";
+    } else {
+        std::cout << "Note: no tohost store - fell back to the PC-parked heuristic\n";
+    }
+    std::cout << "Registers after " << ran << " cycles:\n";
     for (int i = 0; i < 32; i++)
         if (regs[i])
             std::cout << "  x" << i << " = " << regs[i]

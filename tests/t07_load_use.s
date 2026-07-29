@@ -12,4 +12,6 @@ sw   x7, 8(x0)
 lw   x8, 8(x0)
 add  x8, x8, x6
 
+tohost          # signal completion (exit code 1 = pass)
+
 halt
