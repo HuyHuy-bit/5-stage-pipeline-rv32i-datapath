@@ -52,7 +52,8 @@ jobs:
 
       - name: Run compliance suite
         env:
-          ARCH_TEST: ~/riscv-arch-test
+          # $HOME, not "~": a tilde in a YAML env value is a literal string.
+          ARCH_TEST: /home/runner/riscv-arch-test
         run: |
           cd compliance
           ./run_compliance.sh

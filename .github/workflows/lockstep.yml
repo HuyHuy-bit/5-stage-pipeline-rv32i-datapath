@@ -19,7 +19,8 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y gcc-riscv64-unknown-elf device-tree-compiler
+          sudo apt-get install -y gcc-riscv64-unknown-elf device-tree-compiler \
+                                  libboost-dev libboost-regex-dev libboost-system-dev
 
       # Ubuntu's apt Verilator (4.038) predates --timing, which the
       # assertions build depends on; conda-forge tracks current releases.
@@ -65,6 +66,13 @@ jobs:
 
       - name: Run lockstep against Spike
         env:
-          ARCH_TEST: ~/riscv-arch-test
-          SPIKE: ~/.local/spike/bin/spike
-        run: make lockstep
+          # $HOME, not "~": a tilde in a YAML env value is a literal string,
+          # and neither the shell nor Python expands it on the way through.
+          ARCH_TEST: /home/runner/riscv-arch-test
+          SPIKE: /home/runner/.local/spike/bin/spike
+        run: |
+          # Fail early and clearly if the Spike build or cache restore didn't
+          # actually produce a binary, rather than 38 confusing divergences.
+          test -x "$SPIKE" || { echo "spike missing at $SPIKE"; exit 1; }
+          "$SPIKE" --help >/dev/null 2>&1 || true
+          make lockstep

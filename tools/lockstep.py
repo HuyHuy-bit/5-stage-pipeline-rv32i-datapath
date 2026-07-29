@@ -22,8 +22,11 @@ import sys
 
 RESET_PC = 0x80000000
 
-SPIKE = os.environ.get(
-    "SPIKE", os.path.expanduser("~/projects/riscv-isa-sim/build/spike"))
+# expanduser is applied to the environment value too, not just the default:
+# a "~/..." path passed through a CI env block arrives as a literal tilde,
+# which no shell has expanded and Python will not resolve on its own.
+SPIKE = os.path.expanduser(
+    os.environ.get("SPIKE", "~/projects/riscv-isa-sim/build/spike"))
 
 # A Spike commit line looks like:
 #   core   0: 3 0x80000000 (0x00500093) x1  0x00000005
@@ -44,6 +47,9 @@ def spike_trace(elf, limit):
     # Streamed, not captured wholesale: these programs end by parking in a
     # self-loop (the RTL's end-of-test convention), so Spike never terminates
     # on its own. Read until we have enough retirements, then kill it.
+    if not os.path.exists(SPIKE):
+        sys.exit(f"error: spike not found at {SPIKE!r} "
+                 f"(set $SPIKE to its absolute path)")
     proc = subprocess.Popen([SPIKE, "--isa=rv32i", "-l", "--log-commits", elf],
                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             text=True)

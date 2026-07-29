@@ -2,6 +2,9 @@
 set -u
 
 ARCH_TEST="${ARCH_TEST:-$HOME/riscv-arch-test}"
+# A "~/..." value arriving from a CI env block is a literal tilde that
+# no shell has expanded; do it here so the path resolves either way.
+ARCH_TEST="${ARCH_TEST/#\~/$HOME}"
 REPO_ROOT="${REPO_ROOT:-$(git rev-parse --show-toplevel)}"
 COMPLIANCE="$REPO_ROOT/compliance"
 SIM="$REPO_ROOT/obj_dir/Vcpu"
