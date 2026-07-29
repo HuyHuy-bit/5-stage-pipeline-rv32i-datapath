@@ -1,134 +1,23 @@
 `default_nettype none
 
-// id_ex_reg.sv - latches decoded operands + control signals into the EX stage.
+import rv32i_pkg::*;
+
+// id_ex_reg.sv - latches decoded operands + control into the EX stage.
 module id_ex_reg (
-    input  var logic        clk,
-    input  var logic        rst,
-    input  var logic         flush,     // bubble insert (control hazard from EX, or Step-3 hazard unit)
-    input  var logic         freeze,    // hold contents, outranking flush (memory stall)
-
-    // datapath values coming out of ID
-    input  var logic [31:0] pc_in,
-    input  var logic [31:0] pc_plus4_in,
-    input  var logic [31:0] rs1_data_in,
-    input  var logic [31:0] rs2_data_in,
-    input  var logic [31:0] imm_in,
-    input  var logic [4:0]  rs1_addr_in,
-    input  var logic [4:0]  rs2_addr_in,
-    input  var logic [4:0]  rd_addr_in,
-    input  var logic [2:0]  funct3_in,
-
-    // control signals coming out of ID
-    input  var logic        reg_write_en_in,
-    input  var logic        alu_src_in,
-    input  var logic        alu_a_src_in,
-    input  var logic [3:0]  alu_op_in,
-    input  var logic        mem_write_in,
-    input  var logic        mem_read_in,
-    input  var logic        branch_in,
-    input  var logic [1:0]  pc_src_in,
-    input  var logic [1:0]  wb_src_in,
-    input  var logic        valid_in,
-    input  var logic        predicted_taken_in,
-    input  var logic [31:0] predicted_target_in,
-    input  var logic        is_csr_in,
-    input  var logic        is_system_in,
-    input  var logic        illegal_in,
-    input  var logic [11:0] csr_addr_in,
-    input  var logic [31:0] csr_wdata_in,
-    input  var logic [31:0] instr_in,
-
-    // outputs into EX
-    output var logic [31:0] pc_out,
-    output var logic [31:0] pc_plus4_out,
-    output var logic [31:0] rs1_data_out,
-    output var logic [31:0] rs2_data_out,
-    output var logic [31:0] imm_out,
-    output var logic [4:0]  rs1_addr_out,
-    output var logic [4:0]  rs2_addr_out,
-    output var logic [4:0]  rd_addr_out,
-    output var logic [2:0]  funct3_out,
-
-    output var logic        reg_write_en_out,
-    output var logic        alu_src_out,
-    output var logic        alu_a_src_out,
-    output var logic [3:0]  alu_op_out,
-    output var logic        mem_write_out,
-    output var logic        mem_read_out,
-    output var logic        branch_out,
-    output var logic [1:0]  pc_src_out,
-    output var logic [1:0]  wb_src_out,
-    output var logic        valid_out,
-    output var logic        predicted_taken_out,
-    output var logic [31:0] predicted_target_out,
-    output var logic        is_csr_out,
-    output var logic        is_system_out,
-    output var logic        illegal_out,
-    output var logic [11:0] csr_addr_out,
-    output var logic [31:0] csr_wdata_out,
-    output var logic [31:0] instr_out
+    input  var logic   clk,
+    input  var logic   rst,
+    input  var logic   flush,   // bubble insert (mispredict, load-use, or trap)
+    input  var logic   freeze,  // hold contents, outranking flush (memory stall)
+    input  var id_ex_t d,
+    output var id_ex_t q
 );
+    // Clearing to '0 zeroes every control field, which is what makes a flushed
+    // slot an architectural NOP: no register write, no memory access, no
+    // branch.
     always_ff @(posedge clk) begin
-        if (freeze && !rst) begin
-            // hold - a memory stall freezes the whole pipe
-        end else if (rst || flush) begin
-            pc_out           <= 32'd0;
-            pc_plus4_out     <= 32'd0;
-            rs1_data_out     <= 32'd0;
-            rs2_data_out     <= 32'd0;
-            imm_out          <= 32'd0;
-            rs1_addr_out     <= 5'd0;
-            rs2_addr_out     <= 5'd0;
-            rd_addr_out      <= 5'd0;
-            funct3_out       <= 3'd0;
-            // zero every control signal -> this becomes an architectural NOP
-            reg_write_en_out <= 1'b0;
-            alu_src_out      <= 1'b0;
-            alu_a_src_out    <= 1'b0;
-            alu_op_out       <= 4'd0;
-            mem_write_out    <= 1'b0;
-            mem_read_out     <= 1'b0;
-            branch_out       <= 1'b0;
-            pc_src_out       <= 2'b00;
-            wb_src_out       <= 2'b00;
-            valid_out        <= 1'b0;
-            predicted_taken_out  <= 1'b0;
-            predicted_target_out <= 32'd0;
-            is_csr_out           <= 1'b0;
-            is_system_out        <= 1'b0;
-            illegal_out          <= 1'b0;
-            csr_addr_out         <= 12'd0;
-            csr_wdata_out        <= 32'd0;
-            instr_out            <= 32'd0;
-        end else begin
-            pc_out           <= pc_in;
-            pc_plus4_out     <= pc_plus4_in;
-            rs1_data_out     <= rs1_data_in;
-            rs2_data_out     <= rs2_data_in;
-            imm_out          <= imm_in;
-            rs1_addr_out     <= rs1_addr_in;
-            rs2_addr_out     <= rs2_addr_in;
-            rd_addr_out      <= rd_addr_in;
-            funct3_out       <= funct3_in;
-            reg_write_en_out <= reg_write_en_in;
-            alu_src_out      <= alu_src_in;
-            alu_a_src_out    <= alu_a_src_in;
-            alu_op_out       <= alu_op_in;
-            mem_write_out    <= mem_write_in;
-            mem_read_out     <= mem_read_in;
-            branch_out       <= branch_in;
-            pc_src_out       <= pc_src_in;
-            wb_src_out       <= wb_src_in;
-            valid_out        <= valid_in;
-            predicted_taken_out  <= predicted_taken_in;
-            predicted_target_out <= predicted_target_in;
-            is_csr_out           <= is_csr_in;
-            is_system_out        <= is_system_in;
-            illegal_out          <= illegal_in;
-            csr_addr_out         <= csr_addr_in;
-            csr_wdata_out        <= csr_wdata_in;
-            instr_out            <= instr_in;
-        end
+        if (freeze && !rst)    ;          // hold - a memory stall freezes the whole pipe
+        else if (rst || flush) q <= '0;
+        else                   q <= d;
     end
 endmodule
 

@@ -1,15 +1,21 @@
 `verilator_config
 
-// import rv32i_pkg::*; is deliberate: one shared package, six consumers.
+// import rv32i_pkg::*; is deliberate: one shared package. The pipeline
+// register modules import it for the payload struct types.
 lint_off -rule IMPORTSTAR -file "*/alu.sv"
 lint_off -rule IMPORTSTAR -file "*/control.sv"
 lint_off -rule IMPORTSTAR -file "*/csr.sv"
 lint_off -rule IMPORTSTAR -file "*/imm_gen.sv"
 lint_off -rule IMPORTSTAR -file "*/branch_unit.sv"
 lint_off -rule IMPORTSTAR -file "*/lsu.sv"
+lint_off -rule IMPORTSTAR -file "*/if_id_reg.sv"
+lint_off -rule IMPORTSTAR -file "*/id_ex_reg.sv"
+lint_off -rule IMPORTSTAR -file "*/ex_mem_reg.sv"
+lint_off -rule IMPORTSTAR -file "*/mem_wb_reg.sv"
 
-// csr_rdata_mem is latched for a future CSR-forwarding path, not read yet.
-lint_off -rule UNUSEDSIGNAL -file "*/cpu.sv" -match "*csr_rdata_mem*"
+// ex_mem_q.csr_rdata is latched for a future CSR-forwarding path, not read
+// yet. Reported against the whole packed struct, hence the bit-range match.
+lint_off -rule UNUSEDSIGNAL -file "*/cpu.sv" -match "*'ex_mem_q'*"
 
 // idx_of/tag_of intentionally slice disjoint bit ranges of pc; each function
 // only touches the bits it needs.

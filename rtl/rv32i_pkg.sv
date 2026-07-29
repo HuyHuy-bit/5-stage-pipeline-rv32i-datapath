@@ -126,4 +126,76 @@ package rv32i_pkg;
         csr_read_only = (addr[11:10] == 2'b11);
     endfunction
 
+
+    // ---- Pipeline payloads ----
+    // One struct per pipeline register. Adding a signal to a stage is a
+    // one-line change here instead of six edits across three files (a port on
+    // the register module, its reset clause, its latch clause, and the
+    // instantiation's input and output connections in cpu.sv).
+    //
+    // The register modules keep their own control logic rather than sharing a
+    // generic one: their flush/stall/freeze priorities genuinely differ (IF/ID
+    // alone has a `stall` that holds without clearing, and MEM/WB has no flush
+    // at all), and collapsing those into one parameterised module would hide a
+    // real distinction to save a few lines.
+
+    typedef struct packed {
+        logic       reg_write_en;
+        logic       alu_src;
+        logic       alu_a_src;
+        logic [3:0] alu_op;
+        logic       mem_write;
+        logic       mem_read;
+        logic       branch;
+        logic [1:0] pc_src;
+        logic [1:0] wb_src;
+        logic       is_csr;
+        logic       is_system;
+        logic       illegal;
+    } ctrl_t;
+
+    typedef struct packed {
+        logic [31:0] pc, pc_plus4, instr;
+        logic        valid;
+        logic        predicted_taken;
+        logic [31:0] predicted_target;
+    } if_id_t;
+
+    typedef struct packed {
+        logic [31:0] pc, pc_plus4, rs1_data, rs2_data, imm;
+        logic [4:0]  rs1_addr, rs2_addr, rd_addr;
+        logic [2:0]  funct3;
+        ctrl_t       ctrl;
+        logic        valid;
+        logic        predicted_taken;
+        logic [31:0] predicted_target;
+        logic [11:0] csr_addr;
+        logic [31:0] csr_wdata;
+        logic [31:0] instr;
+    } id_ex_t;
+
+    typedef struct packed {
+        logic [31:0] alu_result, rs2_data, pc_plus4;
+        logic [4:0]  rd_addr;
+        logic [2:0]  funct3;
+        logic        reg_write_en, mem_write, mem_read;
+        logic [1:0]  wb_src;
+        logic        valid;
+        logic [31:0] pc;
+        logic        exc_pending;
+        logic [31:0] exc_cause;
+        logic        is_csr, is_system;
+        logic [11:0] csr_addr;
+        logic [2:0]  csr_funct3;
+        logic [31:0] csr_wdata, csr_rdata, instr;
+    } ex_mem_t;
+
+    typedef struct packed {
+        logic [31:0] mem_read_data, alu_result, pc_plus4;
+        logic [4:0]  rd_addr;
+        logic        reg_write_en;
+        logic [1:0]  wb_src;
+        logic        valid;
+    } mem_wb_t;
+
 endpackage

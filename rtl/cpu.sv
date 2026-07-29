@@ -138,33 +138,35 @@ module cpu #(
                     : pc_plus4_if;
 
     // IF/ID register
-    logic [31:0] pc_id, pc_plus4_id, instr_id;
-    logic        valid_id;
-    logic        predicted_taken_id;
-    logic [31:0] predicted_target_id;
+    if_id_t if_id_d, if_id_q;
+    always_comb begin
+        if_id_d                  = '0;
+        if_id_d.pc               = pc_out;
+        if_id_d.pc_plus4         = pc_plus4_if;
+        if_id_d.instr            = instr_if;
+        if_id_d.predicted_taken  = predict_taken_if;
+        if_id_d.predicted_target = predict_target_if;
+        if_id_d.valid            = 1'b1;   // IF always produces a real fetched instruction
+    end
 
     if_id_reg u_if_id (
         .clk(clk), .rst(rst),
         .flush(ex_flush || trap_redirect),
         .stall(load_use_stall),
         .freeze(pipe_stall),
-        .pc_in(pc_out), .pc_plus4_in(pc_plus4_if), .instr_in(instr_if),
-        .predicted_taken_in(predict_taken_if), .predicted_target_in(predict_target_if),
-        .pc_out(pc_id), .pc_plus4_out(pc_plus4_id), .instr_out(instr_id),
-        .valid_out(valid_id),
-        .predicted_taken_out(predicted_taken_id), .predicted_target_out(predicted_target_id)
+        .d(if_id_d), .q(if_id_q)
     );
 
     // ID stage
     logic [6:0] opcode_id, funct7_id;
     logic [2:0] funct3_id;
     logic [4:0] rs1_addr_id, rs2_addr_id, rd_addr_id;
-    assign opcode_id   = instr_id[6:0];
-    assign rd_addr_id  = instr_id[11:7];
-    assign funct3_id   = instr_id[14:12];
-    assign rs1_addr_id = instr_id[19:15];
-    assign rs2_addr_id = instr_id[24:20];
-    assign funct7_id   = instr_id[31:25];
+    assign opcode_id   = if_id_q.instr[6:0];
+    assign rd_addr_id  = if_id_q.instr[11:7];
+    assign funct3_id   = if_id_q.instr[14:12];
+    assign rs1_addr_id = if_id_q.instr[19:15];
+    assign rs2_addr_id = if_id_q.instr[24:20];
+    assign funct7_id   = if_id_q.instr[31:25];
 
     logic        reg_write_en_id, alu_src_id, mem_write_id, mem_read_id, branch_id, alu_a_src_id;
     logic [3:0]  alu_op_id;
@@ -185,7 +187,7 @@ module cpu #(
     // the rs1 field instead of a register value.
     logic [11:0] csr_addr_id;
     logic [31:0] csr_wdata_id;
-    assign csr_addr_id  = instr_id[31:20];
+    assign csr_addr_id  = if_id_q.instr[31:20];
     assign csr_wdata_id = funct3_id[2] ? {27'd0, rs1_addr_id} : reg_rs1_data_id;
 
     logic [31:0] reg_rs1_data_id, reg_rs2_data_id;
@@ -193,29 +195,16 @@ module cpu #(
 
     reg_file u_reg_file (
         .clk(clk), .rst(rst),
-        .rs1_addr(rs1_addr_id), .rs2_addr(rs2_addr_id), .rd_addr(rd_addr_wb),
-        .rd_data(write_back_data), .rd_write_en(reg_write_en_wb),
+        .rs1_addr(rs1_addr_id), .rs2_addr(rs2_addr_id), .rd_addr(mem_wb_q.rd_addr),
+        .rd_data(write_back_data), .rd_write_en(mem_wb_q.reg_write_en),
         .rs1_data(reg_rs1_data_id), .rs2_data(reg_rs2_data_id)
     );
 
     logic [31:0] imm_id;
-    imm_gen u_imm_gen ( .instr(instr_id), .imm(imm_id) );
+    imm_gen u_imm_gen ( .instr(if_id_q.instr), .imm(imm_id) );
 
     // ID/EX register
-    logic [31:0] pc_ex, pc_plus4_ex, rs1_data_ex, rs2_data_ex, imm_ex;
-    logic [4:0]  rs1_addr_ex, rs2_addr_ex, rd_addr_ex;
-    logic [2:0]  funct3_ex;
-    logic        reg_write_en_ex, alu_src_ex, alu_a_src_ex, mem_write_ex, mem_read_ex, branch_ex;
-    logic [3:0]  alu_op_ex;
-    logic [1:0]  pc_src_ex, wb_src_ex;
-    logic        valid_ex;
-    logic        predicted_taken_ex;
-    logic [31:0] predicted_target_ex;
-    logic        is_csr_ex, is_system_ex, illegal_ex;
     logic [31:0] csr_rdata_ex;   // old CSR value, read combinationally in EX
-    logic [11:0] csr_addr_ex;
-    logic [31:0] csr_wdata_ex;
-    logic [31:0] instr_ex;
 
     // A taken branch/jump resolves in EX one cycle before this register would
     // otherwise latch the two wrong-path instructions behind it - flush next cycle.
@@ -224,38 +213,48 @@ module cpu #(
     logic id_ex_flush;
     assign id_ex_flush = ex_flush || load_use_stall || trap_redirect;
 
+    id_ex_t id_ex_d, id_ex_q;
+    always_comb begin
+        id_ex_d                   = '0;
+        id_ex_d.pc                = if_id_q.pc;
+        id_ex_d.pc_plus4          = if_id_q.pc_plus4;
+        id_ex_d.rs1_data          = reg_rs1_data_id;
+        id_ex_d.rs2_data          = reg_rs2_data_id;
+        id_ex_d.imm               = imm_id;
+        id_ex_d.rs1_addr          = rs1_addr_id;
+        id_ex_d.rs2_addr          = rs2_addr_id;
+        id_ex_d.rd_addr           = rd_addr_id;
+        id_ex_d.funct3            = funct3_id;
+        id_ex_d.ctrl.reg_write_en = reg_write_en_id;
+        id_ex_d.ctrl.alu_src      = alu_src_id;
+        id_ex_d.ctrl.alu_a_src    = alu_a_src_id;
+        id_ex_d.ctrl.alu_op       = alu_op_id;
+        id_ex_d.ctrl.mem_write    = mem_write_id;
+        id_ex_d.ctrl.mem_read     = mem_read_id;
+        id_ex_d.ctrl.branch       = branch_id;
+        id_ex_d.ctrl.pc_src       = pc_src_id;
+        id_ex_d.ctrl.wb_src       = wb_src_id;
+        id_ex_d.ctrl.is_csr       = is_csr_id;
+        id_ex_d.ctrl.is_system    = is_system_id;
+        id_ex_d.ctrl.illegal      = illegal_id;
+        id_ex_d.valid             = if_id_q.valid;
+        id_ex_d.predicted_taken   = if_id_q.predicted_taken;
+        id_ex_d.predicted_target  = if_id_q.predicted_target;
+        id_ex_d.csr_addr          = csr_addr_id;
+        id_ex_d.csr_wdata         = csr_wdata_id;
+        id_ex_d.instr             = if_id_q.instr;
+    end
+
     id_ex_reg u_id_ex (
         .clk(clk), .rst(rst), .flush(id_ex_flush), .freeze(pipe_stall),
-        .pc_in(pc_id), .pc_plus4_in(pc_plus4_id),
-        .rs1_data_in(reg_rs1_data_id), .rs2_data_in(reg_rs2_data_id), .imm_in(imm_id),
-        .rs1_addr_in(rs1_addr_id), .rs2_addr_in(rs2_addr_id), .rd_addr_in(rd_addr_id),
-        .funct3_in(funct3_id),
-        .reg_write_en_in(reg_write_en_id), .alu_src_in(alu_src_id), .alu_a_src_in(alu_a_src_id),
-        .alu_op_in(alu_op_id), .mem_write_in(mem_write_id), .mem_read_in(mem_read_id),
-        .branch_in(branch_id), .pc_src_in(pc_src_id), .wb_src_in(wb_src_id),
-        .valid_in(valid_id),
-        .predicted_taken_in(predicted_taken_id), .predicted_target_in(predicted_target_id),
-        .is_csr_in(is_csr_id), .is_system_in(is_system_id), .illegal_in(illegal_id),
-        .csr_addr_in(csr_addr_id), .csr_wdata_in(csr_wdata_id), .instr_in(instr_id),
-
-        .pc_out(pc_ex), .pc_plus4_out(pc_plus4_ex),
-        .rs1_data_out(rs1_data_ex), .rs2_data_out(rs2_data_ex), .imm_out(imm_ex),
-        .rs1_addr_out(rs1_addr_ex), .rs2_addr_out(rs2_addr_ex), .rd_addr_out(rd_addr_ex),
-        .funct3_out(funct3_ex),
-        .reg_write_en_out(reg_write_en_ex), .alu_src_out(alu_src_ex), .alu_a_src_out(alu_a_src_ex),
-        .alu_op_out(alu_op_ex), .mem_write_out(mem_write_ex), .mem_read_out(mem_read_ex),
-        .branch_out(branch_ex), .pc_src_out(pc_src_ex), .wb_src_out(wb_src_ex),
-        .valid_out(valid_ex),
-        .predicted_taken_out(predicted_taken_ex), .predicted_target_out(predicted_target_ex),
-        .is_csr_out(is_csr_ex), .is_system_out(is_system_ex), .illegal_out(illegal_ex),
-        .csr_addr_out(csr_addr_ex), .csr_wdata_out(csr_wdata_ex), .instr_out(instr_ex)
+        .d(id_ex_d), .q(id_ex_q)
     );
 
     // Hazard detection (load-use)
     // Checks the instruction now sitting in EX (via the ID/EX register's
     // own outputs) against the instruction currently being decoded in ID.
     hazard_detect u_hazard_detect (
-        .mem_read_ex(mem_read_ex), .rd_addr_ex(rd_addr_ex),
+        .mem_read_ex(id_ex_q.ctrl.mem_read), .rd_addr_ex(id_ex_q.rd_addr),
         .rs1_addr_id(rs1_addr_id), .rs2_addr_id(rs2_addr_id),
         .stall(load_use_stall)
     );
@@ -266,30 +265,30 @@ module cpu #(
     // in the pipe is about to write the same register.
     logic [1:0] forward_a, forward_b;
     forwarding_unit u_forwarding_unit (
-        .rs1_addr_ex(rs1_addr_ex), .rs2_addr_ex(rs2_addr_ex),
-        .rd_addr_mem(rd_addr_mem), .reg_write_en_mem(reg_write_en_mem),
-        .rd_addr_wb(rd_addr_wb),   .reg_write_en_wb(reg_write_en_wb),
+        .rs1_addr_ex(id_ex_q.rs1_addr), .rs2_addr_ex(id_ex_q.rs2_addr),
+        .rd_addr_mem(ex_mem_q.rd_addr), .reg_write_en_mem(ex_mem_q.reg_write_en),
+        .rd_addr_wb(mem_wb_q.rd_addr),   .reg_write_en_wb(mem_wb_q.reg_write_en),
         .forward_a(forward_a), .forward_b(forward_b)
     );
 
     // The value the EX/MEM stage will actually write back: for a CSR
     // instruction it's the old CSR value, otherwise the ALU result. Forwarding
-    // must use THIS, not raw alu_result_mem, or a CSR read forwarded to the
+    // must use THIS, not raw ex_mem_q.alu_result, or a CSR read forwarded to the
     // next instruction delivers garbage.
     logic [31:0] mem_fwd_value;
-    assign mem_fwd_value = is_csr_mem ? csr_rdata_commit : alu_result_mem;
+    assign mem_fwd_value = ex_mem_q.is_csr ? csr_rdata_commit : ex_mem_q.alu_result;
 
     logic [31:0] rs1_data_ex_fwd, rs2_data_ex_fwd;
     always_comb begin
         case (forward_a)
             2'b01:   rs1_data_ex_fwd = mem_fwd_value;    // from EX/MEM (CSR-aware)
             2'b10:   rs1_data_ex_fwd = write_back_data;  // from MEM/WB (WB-stage mux output)
-            default: rs1_data_ex_fwd = rs1_data_ex;      // no hazard - use registered value
+            default: rs1_data_ex_fwd = id_ex_q.rs1_data;      // no hazard - use registered value
         endcase
         case (forward_b)
             2'b01:   rs2_data_ex_fwd = mem_fwd_value;
             2'b10:   rs2_data_ex_fwd = write_back_data;
-            default: rs2_data_ex_fwd = rs2_data_ex;
+            default: rs2_data_ex_fwd = id_ex_q.rs2_data;
         endcase
     end
 
@@ -297,34 +296,34 @@ module cpu #(
     // csrrw right after an instruction producing rs1 captures a stale value.
     // Immediate variants (funct3[2]==1) use the uimm carried from ID, hazard-free.
     logic [31:0] csr_wdata_ex_fwd;
-    assign csr_wdata_ex_fwd = funct3_ex[2] ? csr_wdata_ex   // uimm (from ID, no hazard)
+    assign csr_wdata_ex_fwd = id_ex_q.funct3[2] ? id_ex_q.csr_wdata   // uimm (from ID, no hazard)
                                            : rs1_data_ex_fwd; // register variant (forwarded)
 
     logic [31:0] alu_a_ex, alu_b_ex, alu_result_ex;
-    assign alu_a_ex = alu_a_src_ex ? pc_ex : rs1_data_ex_fwd;
-    assign alu_b_ex = alu_src_ex   ? imm_ex : rs2_data_ex_fwd;
+    assign alu_a_ex = id_ex_q.ctrl.alu_a_src ? id_ex_q.pc : rs1_data_ex_fwd;
+    assign alu_b_ex = id_ex_q.ctrl.alu_src   ? id_ex_q.imm : rs2_data_ex_fwd;
 
     alu u_alu (
-        .a(alu_a_ex), .b(alu_b_ex), .alu_op(alu_op_ex),
+        .a(alu_a_ex), .b(alu_b_ex), .alu_op(id_ex_q.ctrl.alu_op),
         .result(alu_result_ex)
     );
 
     logic branch_taken_ex;
     branch_unit u_branch_unit (
-        .rs1(rs1_data_ex_fwd), .rs2(rs2_data_ex_fwd), .funct3(funct3_ex),
-        .branch(branch_ex), .pc_sel(branch_taken_ex)
+        .rs1(rs1_data_ex_fwd), .rs2(rs2_data_ex_fwd), .funct3(id_ex_q.funct3),
+        .branch(id_ex_q.ctrl.branch), .pc_sel(branch_taken_ex)
     );
 
     logic [31:0] branch_target_ex, jalr_target_ex;
-    assign branch_target_ex = pc_ex + imm_ex;
-    assign jalr_target_ex   = (rs1_data_ex_fwd + imm_ex) & ~32'd1;
+    assign branch_target_ex = id_ex_q.pc + id_ex_q.imm;
+    assign jalr_target_ex   = (rs1_data_ex_fwd + id_ex_q.imm) & ~32'd1;
 
     // Resolve the actual control-flow outcome in EX.
     logic        actual_taken;      // did this instruction actually redirect?
     logic [31:0] actual_target;     // ...and to where
     logic        is_cf_instr;       // is this a control-flow instruction at all?
     always_comb begin
-        case (pc_src_ex)
+        case (id_ex_q.ctrl.pc_src)
             PC_SRC_BRANCH: begin actual_taken = branch_taken_ex; actual_target = branch_target_ex; is_cf_instr = 1'b1; end
             PC_SRC_JALR:   begin actual_taken = 1'b1;            actual_target = jalr_target_ex;   is_cf_instr = 1'b1; end
             PC_SRC_JAL:    begin actual_taken = 1'b1;            actual_target = branch_target_ex; is_cf_instr = 1'b1; end
@@ -332,57 +331,57 @@ module cpu #(
         endcase
     end
 
-    // The front end predicted a taken redirect to predicted_target_ex (only
-    // meaningful when predicted_taken_ex). We mispredicted if:
+    // The front end predicted a taken redirect to id_ex_q.predicted_target (only
+    // meaningful when id_ex_q.predicted_taken). We mispredicted if:
     //   - actual outcome differs from predicted direction, OR
     //   - both said taken but the cached target was wrong (stale BTB).
     // On a misprediction we flush and redirect to the correct next PC:
     //   taken   -> actual_target
-    //   not-taken (but predicted taken) -> the fall-through pc_ex + 4
+    //   not-taken (but predicted taken) -> the fall-through id_ex_q.pc + 4
     logic        mispredict;
     logic [31:0] correct_next_pc;
     always_comb begin
-        if (actual_taken && predicted_taken_ex && (actual_target == predicted_target_ex)) begin
+        if (actual_taken && id_ex_q.predicted_taken && (actual_target == id_ex_q.predicted_target)) begin
             mispredict      = 1'b0;                 // correctly predicted taken to the right place
             correct_next_pc = actual_target;
-        end else if (!actual_taken && !predicted_taken_ex) begin
+        end else if (!actual_taken && !id_ex_q.predicted_taken) begin
             mispredict      = 1'b0;                 // correctly predicted not-taken
-            correct_next_pc = pc_ex + 32'd4;
+            correct_next_pc = id_ex_q.pc + 32'd4;
         end else if (actual_taken) begin
             mispredict      = 1'b1;                 // should have gone taken (or to a different target)
             correct_next_pc = actual_target;
         end else begin
             mispredict      = 1'b1;                 // predicted taken but actually not-taken
-            correct_next_pc = pc_ex + 32'd4;
+            correct_next_pc = id_ex_q.pc + 32'd4;
         end
     end
 
     // Only valid instructions can mispredict (a bubble in EX must not flush).
     // Special case: a non-control-flow instruction that the front end wrongly
-    // predicted taken (stale BTB alias) must also recover, back to pc_ex+4.
+    // predicted taken (stale BTB alias) must also recover, back to id_ex_q.pc+4.
     logic false_predict;
-    assign false_predict = valid_ex && !is_cf_instr && predicted_taken_ex;
+    assign false_predict = id_ex_q.valid && !is_cf_instr && id_ex_q.predicted_taken;
 
-    assign ex_flush           = (valid_ex && is_cf_instr && mispredict) || false_predict;
-    assign ex_resolved_target = false_predict ? (pc_ex + 32'd4) : correct_next_pc;
+    assign ex_flush           = (id_ex_q.valid && is_cf_instr && mispredict) || false_predict;
+    assign ex_resolved_target = false_predict ? (id_ex_q.pc + 32'd4) : correct_next_pc;
 
     // Predictor learning: update on every resolved control-flow instruction.
     // Not while frozen - ID/EX holds, so the same branch would be presented
     // for as many cycles as the stall lasts and its saturating counter would
     // be driven to the rail by a single resolution.
-    assign bp_update_en     = valid_ex && is_cf_instr && !pipe_stall;
-    assign bp_update_pc     = pc_ex;
+    assign bp_update_en     = id_ex_q.valid && is_cf_instr && !pipe_stall;
+    assign bp_update_pc     = id_ex_q.pc;
     assign bp_update_taken  = actual_taken;
     assign bp_update_target = actual_target;
 
     // CSRRW(I) always writes; CSRRS/CSRRC(I) only when the operand is
     // nonzero (rs1 field doubles as the 5-bit uimm for the *I variants, so
-    // rs1_addr_ex works for both forms).
+    // id_ex_q.rs1_addr works for both forms).
     logic csr_attempts_write, csr_access_illegal;
-    assign csr_attempts_write = (funct3_ex == F3_CSRRW) || (funct3_ex == F3_CSRRWI)
-                               || (rs1_addr_ex != 5'd0);
-    assign csr_access_illegal = !csr_implemented(csr_addr_ex)
-                               || (csr_attempts_write && csr_read_only(csr_addr_ex));
+    assign csr_attempts_write = (id_ex_q.funct3 == F3_CSRRW) || (id_ex_q.funct3 == F3_CSRRWI)
+                               || (id_ex_q.rs1_addr != 5'd0);
+    assign csr_access_illegal = !csr_implemented(id_ex_q.csr_addr)
+                               || (csr_attempts_write && csr_read_only(id_ex_q.csr_addr));
 
     // ---- EX-stage exception detection (Part 1: illegal instruction) ----
     // Detected here, but not acted on until the commit point in MEM, so that
@@ -393,32 +392,32 @@ module cpu #(
     always_comb begin
         exc_pending_ex = 1'b0;
         exc_cause_ex   = 32'd0;
-        if (valid_ex && illegal_ex) begin
+        if (id_ex_q.valid && id_ex_q.ctrl.illegal) begin
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
-        end else if (valid_ex && is_csr_ex && csr_access_illegal) begin
+        end else if (id_ex_q.valid && id_ex_q.ctrl.is_csr && csr_access_illegal) begin
             // Either the address isn't implemented at all, or it's a
             // structurally read-only CSR ([11:10]==11) and this access
             // actually attempts a write (CSRRW(I) always writes; CSRRS/C(I)
             // only when the rs1/uimm operand is nonzero).
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
-        end else if (valid_ex && is_cf_instr && actual_taken && actual_target[1]
-                     && (pc_src_ex == PC_SRC_BRANCH || pc_src_ex == PC_SRC_JAL)) begin
+        end else if (id_ex_q.valid && is_cf_instr && actual_taken && actual_target[1]
+                     && (id_ex_q.ctrl.pc_src == PC_SRC_BRANCH || id_ex_q.ctrl.pc_src == PC_SRC_JAL)) begin
             // Without the C extension, a taken branch or JAL must land on a
             // 4-byte boundary. JALR already masks bit 0 of its target (see
             // its assign above) and is out of scope here, matching the plan.
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_MISALIGNED_FETCH;
-        end else if (valid_ex && mem_read_ex) begin
-            if ((funct3_ex[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
-                (funct3_ex[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
+        end else if (id_ex_q.valid && id_ex_q.ctrl.mem_read) begin
+            if ((id_ex_q.funct3[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
+                (id_ex_q.funct3[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
                 exc_pending_ex = 1'b1;
                 exc_cause_ex   = CAUSE_MISALIGNED_LOAD;
             end
-        end else if (valid_ex && mem_write_ex) begin
-            if ((funct3_ex[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
-                (funct3_ex[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
+        end else if (id_ex_q.valid && id_ex_q.ctrl.mem_write) begin
+            if ((id_ex_q.funct3[1:0] == 2'b10 && alu_result_ex[1:0] != 2'b00) ||
+                (id_ex_q.funct3[1:0] == 2'b01 && alu_result_ex[0]   != 1'b0)) begin
                 exc_pending_ex = 1'b1;
                 exc_cause_ex   = CAUSE_MISALIGNED_STORE;
             end
@@ -432,62 +431,57 @@ module cpu #(
     assign csr_rdata_ex = 32'd0;
 
     // EX/MEM register
-    logic [31:0] alu_result_mem, rs2_data_mem, pc_plus4_mem;
-    logic [4:0]  rd_addr_mem;
-    logic [2:0]  funct3_mem;
-    logic        reg_write_en_mem, mem_write_mem, mem_read_mem;
-    logic [1:0]  wb_src_mem;
-    logic        valid_mem;
-    logic [31:0] pc_mem;
-    logic        exc_pending_mem;
-    logic [31:0] exc_cause_mem;
-    logic        is_csr_mem, is_system_mem;
-    logic [11:0] csr_addr_mem;
-    logic [2:0]  csr_funct3_mem;
-    logic [31:0] csr_wdata_mem, csr_rdata_mem;
-    logic [31:0] instr_mem_r;
+
+ex_mem_t ex_mem_d, ex_mem_q;
+    always_comb begin
+        ex_mem_d              = '0;
+        ex_mem_d.alu_result   = alu_result_ex;
+        ex_mem_d.rs2_data     = rs2_data_ex_fwd;
+        ex_mem_d.pc_plus4     = id_ex_q.pc_plus4;
+        ex_mem_d.rd_addr      = id_ex_q.rd_addr;
+        ex_mem_d.funct3       = id_ex_q.funct3;
+        ex_mem_d.reg_write_en = id_ex_q.ctrl.reg_write_en;
+        ex_mem_d.mem_write    = id_ex_q.ctrl.mem_write;
+        ex_mem_d.mem_read     = id_ex_q.ctrl.mem_read;
+        ex_mem_d.wb_src       = id_ex_q.ctrl.wb_src;
+        ex_mem_d.valid        = id_ex_q.valid;
+        ex_mem_d.pc           = id_ex_q.pc;
+        ex_mem_d.exc_pending  = exc_pending_ex;
+        ex_mem_d.exc_cause    = exc_cause_ex;
+        ex_mem_d.is_csr       = id_ex_q.ctrl.is_csr;
+        ex_mem_d.is_system    = id_ex_q.ctrl.is_system;
+        ex_mem_d.csr_addr     = id_ex_q.csr_addr;
+        ex_mem_d.csr_funct3   = id_ex_q.funct3;
+        ex_mem_d.csr_wdata    = csr_wdata_ex_fwd;
+        ex_mem_d.csr_rdata    = csr_rdata_ex;
+        ex_mem_d.instr        = id_ex_q.instr;
+    end
 
     ex_mem_reg u_ex_mem (
         .clk(clk), .rst(rst),
         .flush(trap_redirect),
         .freeze(pipe_stall),
-        .alu_result_in(alu_result_ex), .rs2_data_in(rs2_data_ex_fwd), .pc_plus4_in(pc_plus4_ex),
-        .rd_addr_in(rd_addr_ex), .funct3_in(funct3_ex),
-        .reg_write_en_in(reg_write_en_ex), .mem_write_in(mem_write_ex), .mem_read_in(mem_read_ex),
-        .wb_src_in(wb_src_ex), .valid_in(valid_ex),
-        .pc_in(pc_ex), .exc_pending_in(exc_pending_ex), .exc_cause_in(exc_cause_ex),
-        .is_csr_in(is_csr_ex), .is_system_in(is_system_ex),
-        .csr_addr_in(csr_addr_ex), .csr_funct3_in(funct3_ex),
-        .csr_wdata_in(csr_wdata_ex_fwd), .csr_rdata_in(csr_rdata_ex), .instr_in(instr_ex),
-
-        .alu_result_out(alu_result_mem), .rs2_data_out(rs2_data_mem), .pc_plus4_out(pc_plus4_mem),
-        .rd_addr_out(rd_addr_mem), .funct3_out(funct3_mem),
-        .reg_write_en_out(reg_write_en_mem), .mem_write_out(mem_write_mem), .mem_read_out(mem_read_mem),
-        .wb_src_out(wb_src_mem), .valid_out(valid_mem),
-        .pc_out(pc_mem), .exc_pending_out(exc_pending_mem), .exc_cause_out(exc_cause_mem),
-        .is_csr_out(is_csr_mem), .is_system_out(is_system_mem),
-        .csr_addr_out(csr_addr_mem), .csr_funct3_out(csr_funct3_mem),
-        .csr_wdata_out(csr_wdata_mem), .csr_rdata_out(csr_rdata_mem), .instr_out(instr_mem_r)
+        .d(ex_mem_d), .q(ex_mem_q)
     );
 
     // MEM stage
     logic mem_write_mem_gated;
-    assign mem_write_mem_gated = mem_write_mem && !(valid_mem && exc_pending_mem);
+    assign mem_write_mem_gated = ex_mem_q.mem_write && !(ex_mem_q.valid && ex_mem_q.exc_pending);
 
     // A faulting access must NOT be presented to memory. If it were, the pipe
     // would freeze waiting for an access to complete while the trap that would
     // release it can only commit once the pipe is unfrozen - a deadlock.
     logic dmem_req;
-    assign dmem_req = valid_mem && (mem_read_mem || mem_write_mem) && !exc_pending_mem;
+    assign dmem_req = ex_mem_q.valid && (ex_mem_q.mem_read || ex_mem_q.mem_write) && !ex_mem_q.exc_pending;
 
     logic [31:0] mem_read_data_mem;   // load result, extended, into MEM/WB
     logic [3:0]  dm_byte_en;
     logic [31:0] dm_store_word, dm_read_word;
 
     lsu u_lsu (
-        .funct3(funct3_mem), .byte_off(alu_result_mem[1:0]),
-        .mem_write(mem_write_mem_gated), .mem_read(mem_read_mem),
-        .store_data(rs2_data_mem), .mem_word(dm_read_word),
+        .funct3(ex_mem_q.funct3), .byte_off(ex_mem_q.alu_result[1:0]),
+        .mem_write(mem_write_mem_gated), .mem_read(ex_mem_q.mem_read),
+        .store_data(ex_mem_q.rs2_data), .mem_word(dm_read_word),
         .byte_en(dm_byte_en), .store_word(dm_store_word),
         .load_data(mem_read_data_mem)
     );
@@ -499,7 +493,7 @@ module cpu #(
     logic        dcache_access, dcache_miss;
 
     if (DCACHE_BYTES == 0) begin : g_no_dcache
-        assign dc_mem_addr       = alu_result_mem;
+        assign dc_mem_addr       = ex_mem_q.alu_result;
         assign dc_mem_req        = dmem_req;
         assign dc_mem_burst      = 1'b0;
         assign dc_mem_byte_en    = dm_byte_en;
@@ -517,7 +511,7 @@ module cpu #(
             .WRITE_BACK(DCACHE_WRITE_BACK)
         ) u_dcache (
             .clk(clk), .rst(rst),
-            .req(dmem_req), .addr(alu_result_mem),
+            .req(dmem_req), .addr(ex_mem_q.alu_result),
             .byte_en(dm_byte_en), .write_word(dm_store_word),
             .read_word(dm_read_word), .ready(dmem_ready),
             .mem_addr(dc_mem_addr), .mem_req(dc_mem_req), .mem_burst(dc_mem_burst),
@@ -549,9 +543,9 @@ module cpu #(
     logic        csr_commit;      // a CSR instruction commits its write this cycle
 
     logic is_mret_mem, is_ecall_mem, is_ebreak_mem;
-    assign is_mret_mem   = is_system_mem && (instr_mem_r == INSTR_MRET);
-    assign is_ecall_mem  = is_system_mem && (instr_mem_r == INSTR_ECALL);
-    assign is_ebreak_mem = is_system_mem && (instr_mem_r == INSTR_EBREAK);
+    assign is_mret_mem   = ex_mem_q.is_system && (ex_mem_q.instr == INSTR_MRET);
+    assign is_ecall_mem  = ex_mem_q.is_system && (ex_mem_q.instr == INSTR_ECALL);
+    assign is_ebreak_mem = ex_mem_q.is_system && (ex_mem_q.instr == INSTR_EBREAK);
 
     always_comb begin
         trap_take    = 1'b0;
@@ -565,17 +559,17 @@ module cpu #(
         // the cycle the pipeline actually advances keeps trap/MRET/CSR strictly
         // once-per-instruction, and keeps the trap redirect from fighting the
         // frozen PC.
-        if (valid_mem && !pipe_stall) begin
-            if (exc_pending_mem) begin
+        if (ex_mem_q.valid && !pipe_stall) begin
+            if (ex_mem_q.exc_pending) begin
                 trap_take    = 1'b1;               // illegal instruction (Part 1)
-                trap_cause_w = exc_cause_mem;
+                trap_cause_w = ex_mem_q.exc_cause;
                 // mtval: faulting address for a misaligned access, the
                 // offending word for illegal instruction (including an
                 // illegal CSR access), 0 for misaligned-fetch (the target
                 // isn't carried this far — spec permits mtval reading 0).
-                case (exc_cause_mem)
-                    CAUSE_ILLEGAL_INSTR:                       trap_val_w = instr_mem_r;
-                    CAUSE_MISALIGNED_LOAD, CAUSE_MISALIGNED_STORE: trap_val_w = alu_result_mem;
+                case (ex_mem_q.exc_cause)
+                    CAUSE_ILLEGAL_INSTR:                       trap_val_w = ex_mem_q.instr;
+                    CAUSE_MISALIGNED_LOAD, CAUSE_MISALIGNED_STORE: trap_val_w = ex_mem_q.alu_result;
                     default: trap_val_w = 32'd0;
                 endcase
             end else if (is_ecall_mem) begin
@@ -586,7 +580,7 @@ module cpu #(
                 trap_cause_w = CAUSE_BREAKPOINT;
             end else if (is_mret_mem) begin
                 mret_take    = 1'b1;
-            end else if (is_csr_mem) begin
+            end else if (ex_mem_q.is_csr) begin
                 csr_commit   = 1'b1;
             end
         end
@@ -596,13 +590,13 @@ module cpu #(
     csr u_csr (
         .clk(clk), .rst(rst),
         .csr_access(csr_commit),
-        .csr_addr(csr_addr_mem),
-        .csr_funct3(csr_funct3_mem),
-        .csr_wdata(csr_wdata_mem),
+        .csr_addr(ex_mem_q.csr_addr),
+        .csr_funct3(ex_mem_q.csr_funct3),
+        .csr_wdata(ex_mem_q.csr_wdata),
         .csr_rdata(csr_rdata_commit),   // old CSR value -> write-back to rd
         .cycle_count(perf_cycle_count), .instret_count(perf_instr_retired),
         .trap_en(trap_take),
-        .trap_pc(pc_mem),
+        .trap_pc(ex_mem_q.pc),
         .trap_cause(trap_cause_w),
         .trap_val(trap_val_w),
         .mtvec_out(mtvec_val),
@@ -621,35 +615,36 @@ module cpu #(
     assign mem_result_for_wb = mem_fwd_value;  // same value used for forwarding
 
     // MEM/WB register
-    logic [31:0] mem_read_data_wb, alu_result_wb, pc_plus4_wb;
-    logic [4:0]  rd_addr_wb;
-    logic        reg_write_en_wb;
-    logic [1:0]  wb_src_wb;
-    logic        valid_wb;
 
     // A trapping instruction must not commit its register write. Gate the
     // reg_write_en flowing into MEM/WB: on a trap, the offending instruction
     // writes no architectural register (only mepc/mcause change).
     logic reg_write_en_mem_gated;
-    assign reg_write_en_mem_gated = reg_write_en_mem && !(trap_take);
+    assign reg_write_en_mem_gated = ex_mem_q.reg_write_en && !(trap_take);
+
+    mem_wb_t mem_wb_d, mem_wb_q;
+    always_comb begin
+        mem_wb_d               = '0;
+        mem_wb_d.mem_read_data = mem_read_data_mem;
+        mem_wb_d.alu_result    = mem_result_for_wb;
+        mem_wb_d.pc_plus4      = ex_mem_q.pc_plus4;
+        mem_wb_d.rd_addr       = ex_mem_q.rd_addr;
+        mem_wb_d.reg_write_en  = reg_write_en_mem_gated;
+        mem_wb_d.wb_src        = ex_mem_q.wb_src;
+        mem_wb_d.valid         = ex_mem_q.valid;
+    end
 
     mem_wb_reg u_mem_wb (
         .clk(clk), .rst(rst), .freeze(pipe_stall),
-        .mem_read_data_in(mem_read_data_mem), .alu_result_in(mem_result_for_wb), .pc_plus4_in(pc_plus4_mem),
-        .rd_addr_in(rd_addr_mem),
-        .reg_write_en_in(reg_write_en_mem_gated), .wb_src_in(wb_src_mem), .valid_in(valid_mem),
-
-        .mem_read_data_out(mem_read_data_wb), .alu_result_out(alu_result_wb), .pc_plus4_out(pc_plus4_wb),
-        .rd_addr_out(rd_addr_wb),
-        .reg_write_en_out(reg_write_en_wb), .wb_src_out(wb_src_wb), .valid_out(valid_wb)
+        .d(mem_wb_d), .q(mem_wb_q)
     );
 
     // WB stage
     always_comb begin
-        case (wb_src_wb)
-            WB_SRC_MEM: write_back_data = mem_read_data_wb; // loads
-            WB_SRC_PC4: write_back_data = pc_plus4_wb;      // jal / jalr return address
-            default:    write_back_data = alu_result_wb;    // r/i/lui/auipc, and CSR (folded in above)
+        case (mem_wb_q.wb_src)
+            WB_SRC_MEM: write_back_data = mem_wb_q.mem_read_data; // loads
+            WB_SRC_PC4: write_back_data = mem_wb_q.pc_plus4;      // jal / jalr return address
+            default:    write_back_data = mem_wb_q.alu_result;    // r/i/lui/auipc, and CSR (folded in above)
         endcase
     end
 
@@ -674,8 +669,8 @@ module cpu #(
             rvfi_pc   <= 32'd0;
             rvfi_insn <= 32'd0;
         end else if (!pipe_stall) begin
-            rvfi_pc   <= pc_mem;
-            rvfi_insn <= instr_mem_r;
+            rvfi_pc   <= ex_mem_q.pc;
+            rvfi_insn <= ex_mem_q.instr;
         end
     end
 
@@ -686,13 +681,13 @@ module cpu #(
     logic        rvfi_valid    /* verilator public_flat_rd */;
     logic [4:0]  rvfi_rd_addr  /* verilator public_flat_rd */;
     logic [31:0] rvfi_rd_wdata /* verilator public_flat_rd */;
-    assign rvfi_valid    = valid_wb && !pipe_stall;
-    assign rvfi_rd_addr  = (reg_write_en_wb && rd_addr_wb != 5'd0) ? rd_addr_wb : 5'd0;
+    assign rvfi_valid    = mem_wb_q.valid && !pipe_stall;
+    assign rvfi_rd_addr  = (mem_wb_q.reg_write_en && mem_wb_q.rd_addr != 5'd0) ? mem_wb_q.rd_addr : 5'd0;
     assign rvfi_rd_wdata = (rvfi_rd_addr != 5'd0) ? write_back_data : 32'd0;
 `endif
 
     // Performance counters
-    // instret only increments on a genuinely retired instruction (valid_wb),
+    // instret only increments on a genuinely retired instruction (mem_wb_q.valid),
     // not on bubbles - a flushed/stalled slot reaching WB looks identical to
     // a legitimately non-writing instruction (store, branch) unless the
     // valid bit threaded through every pipeline register distinguishes them.
@@ -710,7 +705,7 @@ module cpu #(
     // alias is a flush but not a branch mispredict, and folding it into the
     // accuracy figure would understate the predictor.
     logic real_mispredict;
-    assign real_mispredict = valid_ex && is_cf_instr && mispredict;
+    assign real_mispredict = id_ex_q.valid && is_cf_instr && mispredict;
 
     always_ff @(posedge clk) begin
         if (rst) begin
@@ -738,7 +733,7 @@ module cpu #(
                                      + ((dcache_access && !pipe_stall) ? 32'd1 : 32'd0);
             perf_dcache_miss      <= perf_dcache_miss   + (dcache_miss ? 32'd1 : 32'd0);
             if (!pipe_stall) begin
-                perf_instr_retired    <= perf_instr_retired + (valid_wb ? 32'd1 : 32'd0);
+                perf_instr_retired    <= perf_instr_retired + (mem_wb_q.valid ? 32'd1 : 32'd0);
                 perf_stall_count      <= perf_stall_count   + (load_use_stall ? 32'd1 : 32'd0);
                 perf_flush_count      <= perf_flush_count   + ((ex_flush || trap_redirect) ? 32'd1 : 32'd0);
                 perf_mispredict_count <= perf_mispredict_count + (real_mispredict ? 32'd1 : 32'd0);
@@ -766,7 +761,7 @@ module cpu #(
 
     // -- deadlock / memory --
     a_no_faulting_req: assert property (@(posedge clk) disable iff (rst)
-        dmem_req |-> !exc_pending_mem);
+        dmem_req |-> !ex_mem_q.exc_pending);
     // dbg_flush is a testbench-only cache-drain hook, not a hazard stall — it
     // can legitimately hold pipe_stall for as long as it takes to walk every
     // set/way of the D-cache, which is unbounded by this property's design.
@@ -776,21 +771,21 @@ module cpu #(
     // -- register file / writeback --
     // x0-never-written lives in reg_file.sv, next to the array it protects.
     a_bubble_no_retire: assert property (@(posedge clk) disable iff (rst)
-        !valid_wb |-> !reg_write_en_wb);
+        !mem_wb_q.valid |-> !mem_wb_q.reg_write_en);
     a_trap_no_retire: assert property (@(posedge clk) disable iff (rst)
         trap_take |-> !reg_write_en_mem_gated);
 
     // -- forwarding --
     a_fwd_a_priority: assert property (@(posedge clk) disable iff (rst)
-        (reg_write_en_mem && rd_addr_mem != 5'd0 && rd_addr_mem == rs1_addr_ex)
+        (ex_mem_q.reg_write_en && ex_mem_q.rd_addr != 5'd0 && ex_mem_q.rd_addr == id_ex_q.rs1_addr)
         |-> forward_a == 2'b01);
     a_fwd_b_priority: assert property (@(posedge clk) disable iff (rst)
-        (reg_write_en_mem && rd_addr_mem != 5'd0 && rd_addr_mem == rs2_addr_ex)
+        (ex_mem_q.reg_write_en && ex_mem_q.rd_addr != 5'd0 && ex_mem_q.rd_addr == id_ex_q.rs2_addr)
         |-> forward_b == 2'b01);
     a_fwd_a_no_x0: assert property (@(posedge clk) disable iff (rst)
-        rs1_addr_ex == 5'd0 |-> forward_a == 2'b00);
+        id_ex_q.rs1_addr == 5'd0 |-> forward_a == 2'b00);
     a_fwd_b_no_x0: assert property (@(posedge clk) disable iff (rst)
-        rs2_addr_ex == 5'd0 |-> forward_b == 2'b00);
+        id_ex_q.rs2_addr == 5'd0 |-> forward_b == 2'b00);
 `endif // SYNTHESIS
 
     // ---- Functional coverage ----
@@ -815,29 +810,29 @@ module cpu #(
     // predictor outcome: predicted_taken x actual_taken x target_match, only
     // meaningful for an actual control-flow instruction in EX
     logic cov_target_match;
-    assign cov_target_match = (actual_target == predicted_target_ex);
+    assign cov_target_match = (actual_target == id_ex_q.predicted_target);
     c_pred_tt_match:   cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && actual_taken && cov_target_match);
+        cov_en && id_ex_q.valid && is_cf_instr && id_ex_q.predicted_taken && actual_taken && cov_target_match);
     c_pred_tt_mismatch: cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && actual_taken && !cov_target_match);
+        cov_en && id_ex_q.valid && is_cf_instr && id_ex_q.predicted_taken && actual_taken && !cov_target_match);
     c_pred_tn:          cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && is_cf_instr && predicted_taken_ex && !actual_taken);
+        cov_en && id_ex_q.valid && is_cf_instr && id_ex_q.predicted_taken && !actual_taken);
     c_pred_nt:          cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && is_cf_instr && !predicted_taken_ex && actual_taken);
+        cov_en && id_ex_q.valid && is_cf_instr && !id_ex_q.predicted_taken && actual_taken);
     c_pred_nn:          cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && is_cf_instr && !predicted_taken_ex && !actual_taken);
+        cov_en && id_ex_q.valid && is_cf_instr && !id_ex_q.predicted_taken && !actual_taken);
     c_false_predict:    cover property (@(posedge clk) disable iff (rst)
         cov_en && false_predict);
 
-    // control-flow type (pc_src_ex) x taken/not-taken
+    // control-flow type (id_ex_q.ctrl.pc_src) x taken/not-taken
     c_branch_taken:    cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == PC_SRC_BRANCH && actual_taken);
+        cov_en && id_ex_q.valid && id_ex_q.ctrl.pc_src == PC_SRC_BRANCH && actual_taken);
     c_branch_nottaken: cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == PC_SRC_BRANCH && !actual_taken);
+        cov_en && id_ex_q.valid && id_ex_q.ctrl.pc_src == PC_SRC_BRANCH && !actual_taken);
     c_jalr:            cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == PC_SRC_JALR);
+        cov_en && id_ex_q.valid && id_ex_q.ctrl.pc_src == PC_SRC_JALR);
     c_jal:              cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_ex && pc_src_ex == PC_SRC_JAL);
+        cov_en && id_ex_q.valid && id_ex_q.ctrl.pc_src == PC_SRC_JAL);
 
     // trap cause, each implemented cause hit at least once
     c_cause_illegal:    cover property (@(posedge clk) disable iff (rst)
@@ -860,7 +855,7 @@ module cpu #(
     // comment above), so the interesting cross is a trap-eligible instruction
     // parked in MEM *during* a stall, one cycle before it can commit.
     c_trap_pending_and_stall: cover property (@(posedge clk) disable iff (rst)
-        cov_en && valid_mem && exc_pending_mem && pipe_stall);
+        cov_en && ex_mem_q.valid && ex_mem_q.exc_pending && pipe_stall);
 `endif
 
 endmodule
