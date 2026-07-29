@@ -6,3 +6,7 @@ tests/*.hex
 compliance/*.elf
 compliance/*.hex
 compliance/*.sig.output
+
+# Output of the graphify tooling - a supplemental analysis artifact,
+# regenerated on demand and not part of the design.
+graphify-out/
