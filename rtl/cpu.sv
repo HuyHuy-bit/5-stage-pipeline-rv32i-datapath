@@ -686,61 +686,33 @@ ex_mem_t ex_mem_d, ex_mem_q;
     assign rvfi_rd_wdata = (rvfi_rd_addr != 5'd0) ? write_back_data : 32'd0;
 `endif
 
-    // Performance counters
-    // instret only increments on a genuinely retired instruction (mem_wb_q.valid),
-    // not on bubbles - a flushed/stalled slot reaching WB looks identical to
-    // a legitimately non-writing instruction (store, branch) unless the
-    // valid bit threaded through every pipeline register distinguishes them.
-    //
-    // Everything except the cycle count is gated on !pipe_stall. A frozen
-    // pipeline re-presents the same instruction to every stage each cycle, so
-    // an ungated counter would multiply one event by the length of the stall.
-    // Cycles are the exception: those really did elapse, and a stall that
-    // didn't show up in the cycle count would defeat the whole point.
-    //
-    // flush and mispredict are separate events, not the same one counted
-    // twice: a flush is any pipeline squash (mispredict OR trap redirect),
-    // while a mispredict is specifically a control-flow instruction the
-    // predictor got wrong. Predicting a non-branch as taken off a stale BTB
-    // alias is a flush but not a branch mispredict, and folding it into the
-    // accuracy figure would understate the predictor.
+    // Performance counters. See perf_counters.sv for the counting rules.
     logic real_mispredict;
     assign real_mispredict = id_ex_q.valid && is_cf_instr && mispredict;
 
-    always_ff @(posedge clk) begin
-        if (rst) begin
-            perf_cycle_count      <= 32'd0;
-            perf_instr_retired    <= 32'd0;
-            perf_stall_count      <= 32'd0;
-            perf_flush_count      <= 32'd0;
-            perf_mispredict_count <= 32'd0;
-            perf_branch_count     <= 32'd0;
-            perf_mem_stall_count  <= 32'd0;
-            perf_icache_access    <= 32'd0;
-            perf_icache_miss      <= 32'd0;
-            perf_dcache_access    <= 32'd0;
-            perf_dcache_miss      <= 32'd0;
-        end else begin
-            perf_cycle_count      <= perf_cycle_count + 32'd1;
-            perf_mem_stall_count  <= perf_mem_stall_count + (pipe_stall ? 32'd1 : 32'd0);
-            // Accesses are counted where they complete (one per advancing
-            // cycle), misses where they are decided (already one pulse each).
-            // Hit rate is then 1 - miss/access, which is the only combination
-            // that doesn't score a refilled access as a hit as well as a miss.
-            perf_icache_access    <= perf_icache_access + (pipe_stall ? 32'd0 : 32'd1);
-            perf_icache_miss      <= perf_icache_miss   + (icache_miss ? 32'd1 : 32'd0);
-            perf_dcache_access    <= perf_dcache_access
-                                     + ((dcache_access && !pipe_stall) ? 32'd1 : 32'd0);
-            perf_dcache_miss      <= perf_dcache_miss   + (dcache_miss ? 32'd1 : 32'd0);
-            if (!pipe_stall) begin
-                perf_instr_retired    <= perf_instr_retired + (mem_wb_q.valid ? 32'd1 : 32'd0);
-                perf_stall_count      <= perf_stall_count   + (load_use_stall ? 32'd1 : 32'd0);
-                perf_flush_count      <= perf_flush_count   + ((ex_flush || trap_redirect) ? 32'd1 : 32'd0);
-                perf_mispredict_count <= perf_mispredict_count + (real_mispredict ? 32'd1 : 32'd0);
-                perf_branch_count     <= perf_branch_count     + (bp_update_en ? 32'd1 : 32'd0);
-            end
-        end
-    end
+    perf_counters u_perf (
+        .clk(clk), .rst(rst),
+        .pipe_stall(pipe_stall),
+        .retired(mem_wb_q.valid),
+        .load_use_stall(load_use_stall),
+        .flushed(ex_flush || trap_redirect),
+        .mispredicted(real_mispredict),
+        .branch_resolved(bp_update_en),
+        .icache_miss(icache_miss),
+        .dcache_access(dcache_access),
+        .dcache_miss(dcache_miss),
+        .cycle_count(perf_cycle_count),
+        .instr_retired(perf_instr_retired),
+        .stall_count(perf_stall_count),
+        .flush_count(perf_flush_count),
+        .mispredict_count(perf_mispredict_count),
+        .branch_count(perf_branch_count),
+        .mem_stall_count(perf_mem_stall_count),
+        .icache_access(perf_icache_access),
+        .icache_miss_count(perf_icache_miss),
+        .dcache_access_count(perf_dcache_access),
+        .dcache_miss_count(perf_dcache_miss)
+    );
 
     // ---- Design invariants, checked every cycle of every test ----
     // Each property below is an invariant already explained in a comment
