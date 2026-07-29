@@ -12,10 +12,12 @@ lint_off -rule IMPORTSTAR -file "*/if_id_reg.sv"
 lint_off -rule IMPORTSTAR -file "*/id_ex_reg.sv"
 lint_off -rule IMPORTSTAR -file "*/ex_mem_reg.sv"
 lint_off -rule IMPORTSTAR -file "*/mem_wb_reg.sv"
+lint_off -rule IMPORTSTAR -file "*/frontend.sv"
+lint_off -rule IMPORTSTAR -file "*/backend.sv"
 
 // ex_mem_q.csr_rdata is latched for a future CSR-forwarding path, not read
 // yet. Reported against the whole packed struct, hence the bit-range match.
-lint_off -rule UNUSEDSIGNAL -file "*/cpu.sv" -match "*'ex_mem_q'*"
+lint_off -rule UNUSEDSIGNAL -file "*/backend.sv" -match "*'ex_mem_q'*"
 
 // idx_of/tag_of intentionally slice disjoint bit ranges of pc; each function
 // only touches the bits it needs.
@@ -38,4 +40,4 @@ lint_off -rule UNUSEDSIGNAL -file "*/rv32i_pkg.sv" -match "*'addr'*"
 
 // The rvfi_* retirement trace has no in-RTL consumer by design - tb/lockstep.cpp
 // reads it by hierarchy. Unused inside cpu.sv is the intended state.
-lint_off -rule UNUSEDSIGNAL -file "*/cpu.sv" -match "*rvfi_*"
+lint_off -rule UNUSEDSIGNAL -file "*/backend.sv" -match "*rvfi_*"

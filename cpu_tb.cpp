@@ -98,11 +98,11 @@ int main(int argc, char** argv) {
         // Sample after the full tick: the posedge has landed, so valid_wb and
         // the rvfi_* shadow registers describe the instruction that occupies
         // WB this cycle, and pipe_stall says whether it actually retires.
-        if (!rvfifile.empty() && top->rootp->cpu__DOT__rvfi_valid) {
-            rvfi_log.push_back({(uint32_t)top->rootp->cpu__DOT__rvfi_pc,
-                                (uint32_t)top->rootp->cpu__DOT__rvfi_insn,
-                                (uint32_t)top->rootp->cpu__DOT__rvfi_rd_addr,
-                                (uint32_t)top->rootp->cpu__DOT__rvfi_rd_wdata});
+        if (!rvfifile.empty() && top->rootp->cpu__DOT__u_backend__DOT__rvfi_valid) {
+            rvfi_log.push_back({(uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_pc,
+                                (uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_insn,
+                                (uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_rd_addr,
+                                (uint32_t)top->rootp->cpu__DOT__u_backend__DOT__rvfi_rd_wdata});
         }
 
         // A frozen pipeline holds the PC by design, so a memory stall looks
@@ -113,7 +113,7 @@ int main(int argc, char** argv) {
         prev_memstall = cur_memstall;
         if (stalled) continue;
 
-        uint32_t cur_pc = top->rootp->cpu__DOT__pc_out;
+        uint32_t cur_pc = top->rootp->cpu__DOT__u_frontend__DOT__pc_out;
         if (cur_pc == prev_pc) {
             if (++same_pc >= 6) break;   // parked in a self-loop
         } else {
@@ -159,7 +159,7 @@ int main(int argc, char** argv) {
         int sigend   = intarg(argc, argv, "+SIGEND=", 0);
         std::ofstream sf(sigfile);
         for (int i = sigstart; i < sigend; i++) {
-            uint32_t w = top->rootp->cpu__DOT__u_data_mem__DOT__mem_array[i];
+            uint32_t w = top->rootp->cpu__DOT__u_backend__DOT__u_data_mem__DOT__mem_array[i];
             sf << std::hex << std::setw(8) << std::setfill('0') << w << "\n";
         }
         sf.close();
@@ -169,7 +169,7 @@ int main(int argc, char** argv) {
     // Read all 32 registers from Verilator's flattened model root.
     uint32_t regs[32] = {};
     for (int i = 1; i < 32; i++)
-        regs[i] = top->rootp->cpu__DOT__u_reg_file__DOT__reg_array[i];
+        regs[i] = top->rootp->cpu__DOT__u_backend__DOT__u_reg_file__DOT__reg_array[i];
 
     // Print register snapshot (non-zero registers only).
     std::cout << "Registers after " << ran << " cycles (ran until PC parked):\n";
