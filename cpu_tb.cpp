@@ -15,6 +15,8 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <vector>
+#include <array>
 
 // ---- arg helpers -------------------------------------------------------
 static std::string strarg(int argc, char** argv, const char* pfx, const char* def) {
@@ -59,6 +61,10 @@ int main(int argc, char** argv) {
     int         cycles  = intarg(argc, argv, "+CYCLES=",  20);
     std::string reffile = strarg(argc, argv, "+REFFILE=", "");
     std::string vcdfile = strarg(argc, argv, "+VCD=",     "cpu.vcd");
+    // Retirement trace for Spike co-simulation. Off unless a path is given,
+    // so every existing invocation is unaffected.
+    std::string rvfifile = strarg(argc, argv, "+RVFI_TRACE=", "");
+    std::vector<std::array<uint32_t,4>> rvfi_log;   // pc, insn, rd, wdata
 
     const std::unique_ptr<Vcpu> top{new Vcpu{ctx.get()}};
 
@@ -89,6 +95,16 @@ int main(int argc, char** argv) {
         tick();
         ran++;
 
+        // Sample after the full tick: the posedge has landed, so valid_wb and
+        // the rvfi_* shadow registers describe the instruction that occupies
+        // WB this cycle, and pipe_stall says whether it actually retires.
+        if (!rvfifile.empty() && top->rootp->cpu__DOT__rvfi_valid) {
+            rvfi_log.push_back({(uint32_t)top->rootp->cpu__DOT__rvfi_pc,
+                                (uint32_t)top->rootp->cpu__DOT__rvfi_insn,
+                                (uint32_t)top->rootp->cpu__DOT__rvfi_rd_addr,
+                                (uint32_t)top->rootp->cpu__DOT__rvfi_rd_wdata});
+        }
+
         // A frozen pipeline holds the PC by design, so a memory stall looks
         // exactly like a self-loop. Only judge forward progress on cycles the
         // pipeline actually advanced, or a slow memory ends the run instantly.
@@ -104,6 +120,16 @@ int main(int argc, char** argv) {
             same_pc = 0;
         }
         prev_pc = cur_pc;
+    }
+
+    if (!rvfifile.empty()) {
+        std::ofstream tf(rvfifile);
+        for (auto& r : rvfi_log)
+            tf << std::hex << std::setfill('0')
+               << std::setw(8) << r[0] << " " << std::setw(8) << r[1] << " "
+               << std::dec << r[2] << " "
+               << std::hex << std::setw(8) << r[3] << "\n";
+        std::cout << "RVFI trace: " << rvfi_log.size() << " retirements -> " << rvfifile << "\n";
     }
 
     // Snapshot the counters before the flush. The flush is a harness action,

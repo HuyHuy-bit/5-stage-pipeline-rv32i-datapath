@@ -14,6 +14,10 @@ module cpu #(
     parameter int DCACHE_BLOCK_WORDS = 4,
     parameter int DCACHE_WAYS        = 1,
     parameter int DCACHE_WRITE_BACK  = 0,
+    // Reset vector. 0 for every normal build; the lockstep flow overrides it
+    // so the RTL's PC matches the address Spike's memory map forces programs
+    // to link at (see tools/lockstep.py).
+    parameter logic [31:0] RESET_PC  = 32'h0,
     // Backing-memory depth. Defaults match the pre-parameterization sizes
     // (2MB instruction ROM, 64KB data RAM) so simulation is unaffected;
     // synthesis overrides these to fit a target device's BRAM budget - see
@@ -44,7 +48,7 @@ module cpu #(
     // IF stage
     logic [31:0] pc_out, next_pc, pc_plus4_if, instr_if;
 
-    pc u_pc ( .clk(clk), .rst(rst), .next_pc(next_pc), .pc_out(pc_out) );
+    pc #(.RESET_PC(RESET_PC)) u_pc ( .clk(clk), .rst(rst), .next_pc(next_pc), .pc_out(pc_out) );
     assign pc_plus4_if = pc_out + 32'd4;
 
     // Memory stall. Either memory being busy freezes the entire pipeline for
@@ -648,6 +652,44 @@ module cpu #(
             default:    write_back_data = alu_result_wb;    // r/i/lui/auipc, and CSR (folded in above)
         endcase
     end
+
+`ifndef SYNTHESIS
+    // ---- Retirement trace (RVFI-style naming) ----
+    // Simulation-only, and deliberately NOT module ports: the PC and the
+    // instruction word aren't otherwise needed past MEM, so carrying them
+    // through mem_wb_reg would widen a real pipeline register by 64 bits to
+    // serve a debug consumer. These two shadow registers mirror mem_wb_reg's
+    // latch condition exactly (hold on rst, advance on !freeze), so they stay
+    // in step with the instruction actually sitting in WB.
+    //
+    // tb/lockstep.cpp reads these by hierarchy and compares them against
+    // Spike's commit log. RVFI names are used so the port is recognizable and
+    // so a future formal flow can bind to it directly.
+    // public_flat_rd: no RTL consumer, so Verilator would otherwise optimize
+    // these away before the testbench could read them by hierarchy.
+    logic [31:0] rvfi_pc /* verilator public_flat_rd */;
+    logic [31:0] rvfi_insn /* verilator public_flat_rd */;
+    always_ff @(posedge clk) begin
+        if (rst) begin
+            rvfi_pc   <= 32'd0;
+            rvfi_insn <= 32'd0;
+        end else if (!pipe_stall) begin
+            rvfi_pc   <= pc_mem;
+            rvfi_insn <= instr_mem_r;
+        end
+    end
+
+    // One retirement per asserted cycle. Gated on !pipe_stall for the same
+    // reason perf_instr_retired is: a frozen pipeline re-presents the same
+    // instruction to WB every cycle, and an ungated valid would trace it once
+    // per stalled cycle. This matches instret exactly, by construction.
+    logic        rvfi_valid    /* verilator public_flat_rd */;
+    logic [4:0]  rvfi_rd_addr  /* verilator public_flat_rd */;
+    logic [31:0] rvfi_rd_wdata /* verilator public_flat_rd */;
+    assign rvfi_valid    = valid_wb && !pipe_stall;
+    assign rvfi_rd_addr  = (reg_write_en_wb && rd_addr_wb != 5'd0) ? rd_addr_wb : 5'd0;
+    assign rvfi_rd_wdata = (rvfi_rd_addr != 5'd0) ? write_back_data : 32'd0;
+`endif
 
     // Performance counters
     // instret only increments on a genuinely retired instruction (valid_wb),

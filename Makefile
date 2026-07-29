@@ -41,7 +41,7 @@ ASM      = python3 tools/asm.py
 TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
-.PHONY: all sim assemble test memtiming bench lint wave clean coverage soak
+.PHONY: all sim assemble test memtiming bench lint wave clean coverage soak lockstep lockstep-sim
 
 # Default: build, assemble, run the full suite.
 all: sim assemble test
@@ -120,6 +120,17 @@ coverage: assemble
 	python3 tools/coverage_report.py coverage/merged.dat > docs/coverage.md
 	@echo "wrote docs/coverage.md"
 
+# Spike co-simulation. Built separately because it needs RESET_PC=0x80000000
+# to match the memory map Spike forces programs to link at — see
+# compliance/link/spike-lockstep.ld.
+LOCKSTEP_DIR = obj_dir_lockstep
+lockstep-sim:
+	verilator $(VFLAGS) -GRESET_PC=0x80000000 --Mdir $(LOCKSTEP_DIR) \
+	    --top-module $(TOP) $(CPU_SRCS) $(TB)
+
+lockstep: lockstep-sim
+	./tools/run_lockstep.sh
+
 # Constrained-random regression: SEEDS random programs against the Python
 # golden model (tools/rv32i_model.py). make soak SEEDS=1000
 SEEDS ?= 100
@@ -127,4 +138,4 @@ soak: sim
 	./tools/soak.sh $(SEEDS)
 
 clean:
-	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming obj_dir_cov coverage tests/*.hex tests/*.vcd cpu.vcd
+	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming obj_dir_cov obj_dir_lockstep coverage tests/*.hex tests/*.vcd cpu.vcd

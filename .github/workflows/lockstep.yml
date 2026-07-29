@@ -1,0 +1,70 @@
+name: Spike Lockstep
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'rtl/**'        # only the RTL can change what retires
+
+jobs:
+  lockstep:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -l {0}
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Install toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y gcc-riscv64-unknown-elf device-tree-compiler
+
+      # Ubuntu's apt Verilator (4.038) predates --timing, which the
+      # assertions build depends on; conda-forge tracks current releases.
+      - name: Install Verilator (conda-forge)
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          miniforge-version: latest
+          channels: conda-forge
+          channel-priority: strict
+
+      - name: Install verilator package
+        run: mamba install -y -c conda-forge verilator
+
+      - name: Cache riscv-arch-test
+        id: arch-test-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/riscv-arch-test
+          key: riscv-arch-test-old-framework-2.x
+
+      - name: Clone riscv-arch-test
+        if: steps.arch-test-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --branch old-framework-2.x --depth 1 \
+            https://github.com/riscv-non-isa/riscv-arch-test.git ~/riscv-arch-test
+
+      # Spike is a source build and slow to compile, so it's cached on its
+      # commit-pinned tag rather than rebuilt every run.
+      - name: Cache Spike
+        id: spike-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/spike
+          key: spike-v1.1.1-dev
+
+      - name: Build Spike
+        if: steps.spike-cache.outputs.cache-hit != 'true'
+        run: |
+          git clone --depth 1 https://github.com/riscv-software-src/riscv-isa-sim.git /tmp/spike-src
+          cd /tmp/spike-src && mkdir build && cd build
+          ../configure --prefix=$HOME/.local/spike
+          make -j$(nproc) && make install
+
+      - name: Run lockstep against Spike
+        env:
+          ARCH_TEST: ~/riscv-arch-test
+          SPIKE: ~/.local/spike/bin/spike
+        run: make lockstep
