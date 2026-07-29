@@ -6,6 +6,24 @@
 
 package rv32i_pkg;
 
+    // ---- Widths ----
+    // XLEN is the datapath width: registers, PC, addresses, ALU operands,
+    // immediates, CSRs. Changing it here changes all of them.
+    //
+    // ILEN is the *instruction* width and is deliberately NOT XLEN. RV64
+    // instructions are still 32 bits — only the data path widens — so the
+    // instruction memory, the I-cache line contents, and the encodings below
+    // stay 32-bit regardless. Conflating the two is the classic way to get a
+    // "parameterised" core that only ever worked at one width.
+    //
+    // Note this parameterises *width*, not the ISA: RV64I additionally needs
+    // LD/SD and the *W instruction forms, which is decode work in control.sv
+    // and lsu.sv, not a width change. See docs/MICROARCHITECTURE.md.
+    localparam int XLEN   = 32;
+    localparam int ILEN   = 32;
+    localparam int XBYTES = XLEN / 8;              // byte lanes per data word
+    localparam int XOFFW  = (XBYTES <= 1) ? 1 : $clog2(XBYTES);  // byte-offset width
+
     // ---- Opcodes (instr[6:0]) ----
     localparam logic [6:0] OPCODE_R_TYPE = 7'b0110011;
     localparam logic [6:0] OPCODE_I_TYPE = 7'b0010011;
@@ -74,9 +92,9 @@ package rv32i_pkg;
     localparam logic [2:0] F3_CSRRCI = 3'b111;
 
     // full-instruction encodings for the privileged ops (F3_PRIV)
-    localparam logic [31:0] INSTR_ECALL  = 32'h00000073;
-    localparam logic [31:0] INSTR_EBREAK = 32'h00100073;
-    localparam logic [31:0] INSTR_MRET   = 32'h30200073;
+    localparam logic [ILEN-1:0] INSTR_ECALL  = 32'h00000073;
+    localparam logic [ILEN-1:0] INSTR_EBREAK = 32'h00100073;
+    localparam logic [ILEN-1:0] INSTR_MRET   = 32'h30200073;
 
     // ---- CSR addresses (instr[31:20]) - minimal M-mode set ----
     localparam logic [11:0] CSR_MTVEC     = 12'h305;
@@ -96,15 +114,15 @@ package rv32i_pkg;
 
     // misa: MXL=1 (32-bit) in [31:30], extension bit 'I' (bit 8). No other
     // extensions implemented.
-    localparam logic [31:0] MISA_VALUE = 32'h4000_0100;
+    localparam logic [XLEN-1:0] MISA_VALUE = XLEN'('h4000_0100);
 
     // ---- Exception cause codes (mcause, interrupt bit = 0) ----
-    localparam logic [31:0] CAUSE_MISALIGNED_FETCH = 32'd0;
-    localparam logic [31:0] CAUSE_ILLEGAL_INSTR    = 32'd2;
-    localparam logic [31:0] CAUSE_BREAKPOINT       = 32'd3;
-    localparam logic [31:0] CAUSE_MISALIGNED_LOAD  = 32'd4;
-    localparam logic [31:0] CAUSE_MISALIGNED_STORE = 32'd6;
-    localparam logic [31:0] CAUSE_ECALL_M          = 32'd11;
+    localparam logic [XLEN-1:0] CAUSE_MISALIGNED_FETCH = XLEN'(0);
+    localparam logic [XLEN-1:0] CAUSE_ILLEGAL_INSTR    = XLEN'(2);
+    localparam logic [XLEN-1:0] CAUSE_BREAKPOINT       = XLEN'(3);
+    localparam logic [XLEN-1:0] CAUSE_MISALIGNED_LOAD  = XLEN'(4);
+    localparam logic [XLEN-1:0] CAUSE_MISALIGNED_STORE = XLEN'(6);
+    localparam logic [XLEN-1:0] CAUSE_ECALL_M          = XLEN'(11);
 
     // Every CSR address this core implements. Used both to decide whether an
     // access should trap illegal (cpu.sv) and to dispatch reads/writes
@@ -155,43 +173,45 @@ package rv32i_pkg;
     } ctrl_t;
 
     typedef struct packed {
-        logic [31:0] pc, pc_plus4, instr;
-        logic        valid;
-        logic        predicted_taken;
-        logic [31:0] predicted_target;
+        logic [XLEN-1:0] pc, pc_plus4;
+        logic [ILEN-1:0] instr;
+        logic            valid;
+        logic            predicted_taken;
+        logic [XLEN-1:0] predicted_target;
     } if_id_t;
 
     typedef struct packed {
-        logic [31:0] pc, pc_plus4, rs1_data, rs2_data, imm;
+        logic [XLEN-1:0] pc, pc_plus4, rs1_data, rs2_data, imm;
         logic [4:0]  rs1_addr, rs2_addr, rd_addr;
         logic [2:0]  funct3;
         ctrl_t       ctrl;
         logic        valid;
         logic        predicted_taken;
-        logic [31:0] predicted_target;
-        logic [11:0] csr_addr;
-        logic [31:0] csr_wdata;
-        logic [31:0] instr;
+        logic [XLEN-1:0] predicted_target;
+        logic [11:0]     csr_addr;
+        logic [XLEN-1:0] csr_wdata;
+        logic [ILEN-1:0] instr;
     } id_ex_t;
 
     typedef struct packed {
-        logic [31:0] alu_result, rs2_data, pc_plus4;
+        logic [XLEN-1:0] alu_result, rs2_data, pc_plus4;
         logic [4:0]  rd_addr;
         logic [2:0]  funct3;
         logic        reg_write_en, mem_write, mem_read;
         logic [1:0]  wb_src;
         logic        valid;
-        logic [31:0] pc;
-        logic        exc_pending;
-        logic [31:0] exc_cause;
+        logic [XLEN-1:0] pc;
+        logic            exc_pending;
+        logic [XLEN-1:0] exc_cause;
         logic        is_csr, is_system;
         logic [11:0] csr_addr;
         logic [2:0]  csr_funct3;
-        logic [31:0] csr_wdata, csr_rdata, instr;
+        logic [XLEN-1:0] csr_wdata, csr_rdata;
+        logic [ILEN-1:0] instr;
     } ex_mem_t;
 
     typedef struct packed {
-        logic [31:0] mem_read_data, alu_result, pc_plus4;
+        logic [XLEN-1:0] mem_read_data, alu_result, pc_plus4;
         logic [4:0]  rd_addr;
         logic        reg_write_en;
         logic [1:0]  wb_src;

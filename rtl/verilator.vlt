@@ -14,6 +14,15 @@ lint_off -rule IMPORTSTAR -file "*/ex_mem_reg.sv"
 lint_off -rule IMPORTSTAR -file "*/mem_wb_reg.sv"
 lint_off -rule IMPORTSTAR -file "*/frontend.sv"
 lint_off -rule IMPORTSTAR -file "*/backend.sv"
+lint_off -rule IMPORTSTAR -file "*/instr_mem.sv"
+lint_off -rule IMPORTSTAR -file "*/data_mem.sv"
+lint_off -rule IMPORTSTAR -file "*/icache.sv"
+lint_off -rule IMPORTSTAR -file "*/dcache.sv"
+lint_off -rule IMPORTSTAR -file "*/mem_timing.sv"
+lint_off -rule IMPORTSTAR -file "*/branch_predictor.sv"
+lint_off -rule IMPORTSTAR -file "*/pc.sv"
+lint_off -rule IMPORTSTAR -file "*/reg_file.sv"
+lint_off -rule IMPORTSTAR -file "*/perf_counters.sv"
 
 // ex_mem_q.csr_rdata is latched for a future CSR-forwarding path, not read
 // yet. Reported against the whole packed struct, hence the bit-range match.

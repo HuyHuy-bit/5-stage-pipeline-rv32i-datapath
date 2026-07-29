@@ -61,7 +61,7 @@ tests/%.hex: tests/%.s tools/asm.py
 # silently rather than failing anything.
 memtiming:
 	@verilator --cc --exe --build -j 0 --top-module mem_timing -GLATENCY=10 \
-	    --Mdir obj_dir_memtiming rtl/mem_timing.sv tb/mem_timing_tb.cpp > /dev/null
+	    --Mdir obj_dir_memtiming rtl/rv32i_pkg.sv rtl/mem_timing.sv tb/mem_timing_tb.cpp > /dev/null
 	@./obj_dir_memtiming/Vmem_timing
 
 # Run every test and print a summary.

@@ -3,8 +3,8 @@
 import rv32i_pkg::*;
 
 module branch_unit (
-    input var logic [31:0] rs1,
-    input var logic [31:0] rs2,
+    input var logic [XLEN-1:0] rs1,
+    input var logic [XLEN-1:0] rs2,
     input var logic [2:0] funct3,
     input var logic branch,
     output var logic pc_sel

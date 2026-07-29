@@ -5,6 +5,8 @@
 // stall), which is what the directed tests and the compliance suite run under.
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module instr_mem #(
     parameter int LATENCY     = 1,
     parameter int DEPTH_WORDS = 524288   // 2MB
@@ -13,13 +15,13 @@ module instr_mem #(
     input  var logic        rst,
     input  var logic        req,     // an access is being presented this cycle
     input  var logic        burst,   // requester is walking sequential words
-    input  var logic [31:0] addr,
-    output var logic [31:0] instr,
+    input  var logic [XLEN-1:0] addr,
+    output var logic [ILEN-1:0] instr,
     output var logic        ready
 );
     localparam int WORDW = $clog2(DEPTH_WORDS);
 
-    logic [31:0] mem [0:DEPTH_WORDS-1];
+    logic [ILEN-1:0] mem [0:DEPTH_WORDS-1];
 
 `ifndef SYNTHESIS
     string mem_file;

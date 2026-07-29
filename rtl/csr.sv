@@ -11,30 +11,30 @@ module csr (
     input  var logic        csr_access,   // 1 = a CSR instruction is committing
     input  var logic [11:0] csr_addr,     // which CSR (instr[31:20])
     input  var logic [2:0]  csr_funct3,   // CSRRW/S/C / immediate variant
-    input  var logic [31:0] csr_wdata,    // rs1 value or zero-extended uimm
-    output var logic [31:0] csr_rdata,    // old value -> written back to rd
+    input  var logic [XLEN-1:0] csr_wdata,    // rs1 value or zero-extended uimm
+    output var logic [XLEN-1:0] csr_rdata,    // old value -> written back to rd
 
     // ---- read-only counters, mirrored into mcycle/minstret ----
-    input  var logic [31:0] cycle_count,
-    input  var logic [31:0] instret_count,
+    input  var logic [XLEN-1:0] cycle_count,
+    input  var logic [XLEN-1:0] instret_count,
 
     // ---- trap entry (asserted for one cycle when a trap commits) ----
     input  var logic        trap_en,
-    input  var logic [31:0] trap_pc,      // faulting instruction's PC -> mepc
-    input  var logic [31:0] trap_cause,   // -> mcause
-    input  var logic [31:0] trap_val,     // -> mtval (faulting addr/instr, if any)
-    output var logic [31:0] mtvec_out,    // handler base -> PC redirect target
+    input  var logic [XLEN-1:0] trap_pc,      // faulting instruction's PC -> mepc
+    input  var logic [XLEN-1:0] trap_cause,   // -> mcause
+    input  var logic [XLEN-1:0] trap_val,     // -> mtval (faulting addr/instr, if any)
+    output var logic [XLEN-1:0] mtvec_out,    // handler base -> PC redirect target
 
     // ---- MRET (asserted for one cycle when an MRET commits) ----
     input  var logic        mret_en,
-    output var logic [31:0] mepc_out      // return address -> PC redirect target
+    output var logic [XLEN-1:0] mepc_out      // return address -> PC redirect target
 );
-    logic [31:0] mtvec, mepc, mcause, mscratch, mtval;
+    logic [XLEN-1:0] mtvec, mepc, mcause, mscratch, mtval;
     // mcycle/minstret are R/W in M-mode (software may reinitialize them); a
     // write here only offsets the live counter, no separate storage needed,
     // which keeps a write-then-read round trip trivial to reason about.
-    logic [31:0] mcycle_offset, minstret_offset;
-    logic [31:0] mcycle_val, minstret_val;
+    logic [XLEN-1:0] mcycle_offset, minstret_offset;
+    logic [XLEN-1:0] mcycle_val, minstret_val;
     assign mcycle_val   = cycle_count   + mcycle_offset;
     assign minstret_val = instret_count + minstret_offset;
 
@@ -50,20 +50,20 @@ module csr (
             CSR_MSCRATCH:  csr_rdata = mscratch;
             CSR_MTVAL:     csr_rdata = mtval;
             CSR_MISA:      csr_rdata = MISA_VALUE;
-            CSR_MVENDORID: csr_rdata = 32'd0;
-            CSR_MARCHID:   csr_rdata = 32'd0;
-            CSR_MIMPID:    csr_rdata = 32'd0;
-            CSR_MHARTID:   csr_rdata = 32'd0;
+            CSR_MVENDORID: csr_rdata = XLEN'(0);
+            CSR_MARCHID:   csr_rdata = XLEN'(0);
+            CSR_MIMPID:    csr_rdata = XLEN'(0);
+            CSR_MHARTID:   csr_rdata = XLEN'(0);
             CSR_MCYCLE:    csr_rdata = mcycle_val;
             CSR_MINSTRET:  csr_rdata = minstret_val;
-            CSR_MCYCLEH:   csr_rdata = 32'd0; // 32-bit counters: upper half never overflows into
-            CSR_MINSTRETH: csr_rdata = 32'd0; // in any run this core will see; kept at 0 rather than modeled
-            default:       csr_rdata = 32'd0; // unimplemented reads trap illegal before this matters
+            CSR_MCYCLEH:   csr_rdata = XLEN'(0); // 32-bit counters: upper half never overflows into
+            CSR_MINSTRETH: csr_rdata = XLEN'(0); // in any run this core will see; kept at 0 rather than modeled
+            default:       csr_rdata = XLEN'(0); // unimplemented reads trap illegal before this matters
         endcase
     end
 
     // ---- compute the CSR-instruction write value (RW=swap, RS=set, RC=clear) ----
-    logic [31:0] csr_new;
+    logic [XLEN-1:0] csr_new;
     always_comb begin
         unique case (csr_funct3)
             F3_CSRRW, F3_CSRRWI: csr_new = csr_wdata;
@@ -80,13 +80,13 @@ module csr (
     // made explicit for safety.
     always_ff @(posedge clk) begin
         if (rst) begin
-            mtvec           <= 32'd0;
-            mepc            <= 32'd0;
-            mcause          <= 32'd0;
-            mscratch        <= 32'd0;
-            mtval           <= 32'd0;
-            mcycle_offset   <= 32'd0;
-            minstret_offset <= 32'd0;
+            mtvec           <= XLEN'(0);
+            mepc            <= XLEN'(0);
+            mcause          <= XLEN'(0);
+            mscratch        <= XLEN'(0);
+            mtval           <= XLEN'(0);
+            mcycle_offset   <= XLEN'(0);
+            minstret_offset <= XLEN'(0);
         end else if (trap_en) begin
             mepc   <= trap_pc;
             mcause <= trap_cause;

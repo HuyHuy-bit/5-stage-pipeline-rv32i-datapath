@@ -15,6 +15,8 @@
 // stable for the whole refill and doesn't need latching.
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module icache #(
     parameter int BYTES       = 1024,
     parameter int BLOCK_WORDS = 4,
@@ -24,15 +26,15 @@ module icache #(
     input  var logic        rst,
 
     // CPU side
-    input  var logic [31:0] addr,
-    output var logic [31:0] instr,
+    input  var logic [XLEN-1:0] addr,
+    output var logic [ILEN-1:0] instr,
     output var logic        ready,
 
     // backing memory side
-    output var logic [31:0] mem_addr,
+    output var logic [XLEN-1:0] mem_addr,
     output var logic        mem_req,
     output var logic        mem_burst,
-    input  var logic [31:0] mem_instr,
+    input  var logic [ILEN-1:0] mem_instr,
     input  var logic        mem_ready,
 
     // Counters are misses only; the CPU counts accesses as advancing cycles.
@@ -58,13 +60,13 @@ module icache #(
         end
     end
 
-    logic [31:0]      data  [WAYS][SETS][BLOCK_WORDS];
+    logic [ILEN-1:0]  data  [WAYS][SETS][BLOCK_WORDS];
     logic [TAGW-1:0]  tag   [WAYS][SETS];
     logic             vld   [WAYS][SETS];
     logic [WAYW-1:0]  victim[SETS];
 
     // ---- address split ----
-    logic [31:0]     word_addr, blk_addr;
+    logic [XLEN-1:0] word_addr, blk_addr;
     logic [OFFW-1:0] off;
     logic [IDXW-1:0] idx;
     logic [TAGW-1:0] tg;
@@ -102,7 +104,7 @@ module icache #(
     // Every fetch is a read (this cache never writes on the hit path), so
     // every hit costs the one extra cycle for the registered read to catch
     // up, tracked the same way dcache.sv tracks a load hit.
-    logic [31:0] data_rd_reg;
+    logic [ILEN-1:0] data_rd_reg;
     always_ff @(posedge clk) data_rd_reg <= data[hit_way][idx][off];
 
     // ready must be level, not a pulse: whether the pipeline actually
@@ -119,12 +121,12 @@ module icache #(
     // address a hit was last seen for (not just "was there a hit last
     // cycle") is what makes both cases correct at once.
     logic        prev_hit;
-    logic [31:0] prev_addr;
+    logic [XLEN-1:0] prev_addr;
     logic        hit_wait;
     always_ff @(posedge clk) begin
         if (rst) begin
             prev_hit  <= 1'b0;
-            prev_addr <= 32'd0;
+            prev_addr <= '0;
         end else begin
             prev_hit  <= hit;
             prev_addr <= addr;
@@ -145,7 +147,7 @@ module icache #(
     // streaming discount on its first word too - which is what an open row does.
     assign mem_req   = refilling;
     assign mem_burst = refilling;
-    assign mem_addr  = (blk_addr << (OFFSH + 2)) + ({{(32-OFFW){1'b0}}, fill_word} << 2);
+    assign mem_addr  = (blk_addr << (OFFSH + 2)) + ({{(XLEN-OFFW){1'b0}}, fill_word} << 2);
 
     always_ff @(posedge clk) begin
         if (rst) begin

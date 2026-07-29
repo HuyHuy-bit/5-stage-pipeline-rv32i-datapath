@@ -1,6 +1,8 @@
 // branch_predictor.sv - front-end branch prediction.
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module branch_predictor #(
     parameter int IDX_BITS = 6,                  // 2^6 = 64 entries
     parameter int TAG_BITS = 8
@@ -9,23 +11,23 @@ module branch_predictor #(
     input  var logic        rst,
 
     // ---- predict port (IF stage) ----
-    input  var logic [31:0] pc_predict,          // current fetch PC
+    input  var logic [XLEN-1:0] pc_predict,          // current fetch PC
     output var logic        predict_taken,       // 1 => redirect fetch to predict_target
-    output var logic [31:0] predict_target,
+    output var logic [XLEN-1:0] predict_target,
 
     // ---- update port (EX stage, when a branch/jump resolves) ----
     input  var logic        update_en,           // this cycle a branch/jump resolved
-    input  var logic [31:0] update_pc,           // that instruction's PC
+    input  var logic [XLEN-1:0] update_pc,           // that instruction's PC
     input  var logic        update_taken,        // was it actually taken?
-    input  var logic [31:0] update_target        // its actual target (valid when taken)
+    input  var logic [XLEN-1:0] update_target        // its actual target (valid when taken)
 );
     localparam int NUM_ENTRIES = (1 << IDX_BITS);
 
     // index/tag slicing helpers
-    function automatic logic [IDX_BITS-1:0] idx_of(input logic [31:0] pc);
+    function automatic logic [IDX_BITS-1:0] idx_of(input logic [XLEN-1:0] pc);
         idx_of = pc[IDX_BITS+1:2];               // drop 2 low (word-aligned) bits
     endfunction
-    function automatic logic [TAG_BITS-1:0] tag_of(input logic [31:0] pc);
+    function automatic logic [TAG_BITS-1:0] tag_of(input logic [XLEN-1:0] pc);
         tag_of = pc[IDX_BITS+1+TAG_BITS : IDX_BITS+2];
     endfunction
 
@@ -33,7 +35,7 @@ module branch_predictor #(
     logic [1:0]          bht      [NUM_ENTRIES];
     logic                btb_valid[NUM_ENTRIES];
     logic [TAG_BITS-1:0] btb_tag  [NUM_ENTRIES];
-    logic [31:0]         btb_tgt  [NUM_ENTRIES];
+    logic [XLEN-1:0]         btb_tgt  [NUM_ENTRIES];
 
     // ---- predict (combinational read) ----
     logic [IDX_BITS-1:0] p_idx;
@@ -58,7 +60,7 @@ module branch_predictor #(
                 bht[i]       <= 2'b01;             // weakly not-taken: neutral-ish start
                 btb_valid[i] <= 1'b0;
                 btb_tag[i]   <= '0;
-                btb_tgt[i]   <= 32'd0;
+                btb_tgt[i]   <= XLEN'(0);
             end
         end else if (update_en) begin
             // 2-bit saturating counter toward the actual outcome

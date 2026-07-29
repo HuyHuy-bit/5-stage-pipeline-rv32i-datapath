@@ -1,14 +1,16 @@
 `default_nettype none
+
+import rv32i_pkg::*;
  
 module pc #(
     // Reset vector. 0 for normal builds; the lockstep flow overrides it so the
     // RTL's PC matches the address Spike's memory map forces programs to link at.
-    parameter logic [31:0] RESET_PC = 32'h0
+    parameter logic [XLEN-1:0] RESET_PC = '0
 ) (
     input  var logic        clk,
     input  var logic        rst,
-    input  var logic [31:0] next_pc,    // the address to use next cycle
-    output var logic [31:0] pc_out      // the current instruction address
+    input  var logic [XLEN-1:0] next_pc,    // the address to use next cycle
+    output var logic [XLEN-1:0] pc_out      // the current instruction address
 );
  
     always_ff @(posedge clk) begin

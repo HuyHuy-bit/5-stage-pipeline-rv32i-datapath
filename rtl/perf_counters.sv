@@ -1,5 +1,7 @@
 `default_nettype none
 
+import rv32i_pkg::*;
+
 // perf_counters.sv - the core's self-measurement.
 //
 // Split out of cpu.sv because none of it is datapath: every signal here is an
@@ -42,45 +44,45 @@ module perf_counters (
     input  var logic dcache_access,
     input  var logic dcache_miss,
 
-    output var logic [31:0] cycle_count,
-    output var logic [31:0] instr_retired,
-    output var logic [31:0] stall_count,
-    output var logic [31:0] flush_count,
-    output var logic [31:0] mispredict_count,
-    output var logic [31:0] branch_count,
-    output var logic [31:0] mem_stall_count,
-    output var logic [31:0] icache_access,
-    output var logic [31:0] icache_miss_count,
-    output var logic [31:0] dcache_access_count,
-    output var logic [31:0] dcache_miss_count
+    output var logic [XLEN-1:0] cycle_count,
+    output var logic [XLEN-1:0] instr_retired,
+    output var logic [XLEN-1:0] stall_count,
+    output var logic [XLEN-1:0] flush_count,
+    output var logic [XLEN-1:0] mispredict_count,
+    output var logic [XLEN-1:0] branch_count,
+    output var logic [XLEN-1:0] mem_stall_count,
+    output var logic [XLEN-1:0] icache_access,
+    output var logic [XLEN-1:0] icache_miss_count,
+    output var logic [XLEN-1:0] dcache_access_count,
+    output var logic [XLEN-1:0] dcache_miss_count
 );
     always_ff @(posedge clk) begin
         if (rst) begin
-            cycle_count         <= 32'd0;
-            instr_retired       <= 32'd0;
-            stall_count         <= 32'd0;
-            flush_count         <= 32'd0;
-            mispredict_count    <= 32'd0;
-            branch_count        <= 32'd0;
-            mem_stall_count     <= 32'd0;
-            icache_access       <= 32'd0;
-            icache_miss_count   <= 32'd0;
-            dcache_access_count <= 32'd0;
-            dcache_miss_count   <= 32'd0;
+            cycle_count         <= XLEN'(0);
+            instr_retired       <= XLEN'(0);
+            stall_count         <= XLEN'(0);
+            flush_count         <= XLEN'(0);
+            mispredict_count    <= XLEN'(0);
+            branch_count        <= XLEN'(0);
+            mem_stall_count     <= XLEN'(0);
+            icache_access       <= XLEN'(0);
+            icache_miss_count   <= XLEN'(0);
+            dcache_access_count <= XLEN'(0);
+            dcache_miss_count   <= XLEN'(0);
         end else begin
-            cycle_count         <= cycle_count     + 32'd1;
-            mem_stall_count     <= mem_stall_count + (pipe_stall ? 32'd1 : 32'd0);
-            icache_access       <= icache_access   + (pipe_stall ? 32'd0 : 32'd1);
-            icache_miss_count   <= icache_miss_count + (icache_miss ? 32'd1 : 32'd0);
+            cycle_count         <= cycle_count     + XLEN'(1);
+            mem_stall_count     <= mem_stall_count + (pipe_stall ? XLEN'(1) : XLEN'(0));
+            icache_access       <= icache_access   + (pipe_stall ? XLEN'(0) : XLEN'(1));
+            icache_miss_count   <= icache_miss_count + (icache_miss ? XLEN'(1) : XLEN'(0));
             dcache_access_count <= dcache_access_count
-                                   + ((dcache_access && !pipe_stall) ? 32'd1 : 32'd0);
-            dcache_miss_count   <= dcache_miss_count + (dcache_miss ? 32'd1 : 32'd0);
+                                   + ((dcache_access && !pipe_stall) ? XLEN'(1) : XLEN'(0));
+            dcache_miss_count   <= dcache_miss_count + (dcache_miss ? XLEN'(1) : XLEN'(0));
             if (!pipe_stall) begin
-                instr_retired    <= instr_retired    + (retired         ? 32'd1 : 32'd0);
-                stall_count      <= stall_count      + (load_use_stall  ? 32'd1 : 32'd0);
-                flush_count      <= flush_count      + (flushed         ? 32'd1 : 32'd0);
-                mispredict_count <= mispredict_count + (mispredicted    ? 32'd1 : 32'd0);
-                branch_count     <= branch_count     + (branch_resolved ? 32'd1 : 32'd0);
+                instr_retired    <= instr_retired    + (retired         ? XLEN'(1) : XLEN'(0));
+                stall_count      <= stall_count      + (load_use_stall  ? XLEN'(1) : XLEN'(0));
+                flush_count      <= flush_count      + (flushed         ? XLEN'(1) : XLEN'(0));
+                mispredict_count <= mispredict_count + (mispredicted    ? XLEN'(1) : XLEN'(0));
+                branch_count     <= branch_count     + (branch_resolved ? XLEN'(1) : XLEN'(0));
             end
         end
     end

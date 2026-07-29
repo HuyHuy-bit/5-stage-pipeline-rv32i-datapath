@@ -18,6 +18,8 @@
 // assert which one is better.
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module dcache #(
     parameter int BYTES       = 1024,
     parameter int BLOCK_WORDS = 4,
@@ -29,19 +31,19 @@ module dcache #(
 
     // CPU side
     input  var logic        req,          // a load or store is presented
-    input  var logic [31:0] addr,
-    input  var logic [3:0]  byte_en,      // nonzero => store
-    input  var logic [31:0] write_word,   // already shifted into its lane
-    output var logic [31:0] read_word,
+    input  var logic [XLEN-1:0] addr,
+    input  var logic [XBYTES-1:0] byte_en,      // nonzero => store
+    input  var logic [XLEN-1:0] write_word,   // already shifted into its lane
+    output var logic [XLEN-1:0] read_word,
     output var logic        ready,
 
     // backing memory side
-    output var logic [31:0] mem_addr,
+    output var logic [XLEN-1:0] mem_addr,
     output var logic        mem_req,
     output var logic        mem_burst,
-    output var logic [3:0]  mem_byte_en,
-    output var logic [31:0] mem_write_word,
-    input  var logic [31:0] mem_read_word,
+    output var logic [XBYTES-1:0] mem_byte_en,
+    output var logic [XLEN-1:0] mem_write_word,
+    input  var logic [XLEN-1:0] mem_read_word,
     input  var logic        mem_ready,
 
     // Debug/maintenance: walk every line and write back the dirty ones, so the
@@ -86,7 +88,7 @@ module dcache #(
     logic [WAYW-1:0] victim[SETS];
 
     // ---- address split ----
-    logic [31:0]     word_addr, blk_addr;
+    logic [XLEN-1:0]     word_addr, blk_addr;
     logic [OFFW-1:0] off;
     logic [IDXW-1:0] idx;
     logic [TAGW-1:0] tg;
@@ -187,7 +189,7 @@ module dcache #(
     localparam int AW    = (WORDS <= 1) ? 1 : $clog2(WORDS);
 
     logic [AW-1:0] wr_addr, rd_addr;
-    logic [31:0]   wr_data;
+    logic [XLEN-1:0]   wr_data;
     logic [3:0]    wr_be;
     assign rd_addr = AW'(rd_idx * BLOCK_WORDS + 32'(rd_off));
     assign wr_addr = fill_en ? AW'(idx * BLOCK_WORDS + 32'(fill_word))
@@ -195,9 +197,9 @@ module dcache #(
     assign wr_data = fill_en ? mem_read_word : write_word;
     assign wr_be   = fill_en ? 4'b1111       : byte_en;
 
-    logic [31:0] way_rd_reg [WAYS];
+    logic [XLEN-1:0] way_rd_reg [WAYS];
     for (genvar w = 0; w < WAYS; w++) begin : g_way
-        (* ram_style = "block" *) logic [31:0] way_mem [0:WORDS-1];
+        (* ram_style = "block" *) logic [XLEN-1:0] way_mem [0:WORDS-1];
         logic way_wr_en;
         assign way_wr_en = (fill_en && (fill_way == WAYW'(w)))
                         || (wr_en   && (hit_way  == WAYW'(w)));
@@ -215,7 +217,7 @@ module dcache #(
     // Both consumers read the same muxed, registered output; they never
     // need it in the same cycle (CPU loads resolve in S_IDLE, write-back
     // reads happen outside it).
-    logic [31:0] rd_muxed;
+    logic [XLEN-1:0] rd_muxed;
     assign rd_muxed = way_rd_reg[sel_way_reg];
 
     logic wb_data_valid;
@@ -245,13 +247,13 @@ module dcache #(
     // makes both cases correct at once - see the matching comment in
     // icache.sv.
     logic        load_hit_now, prev_load_hit;
-    logic [31:0] prev_addr;
+    logic [XLEN-1:0] prev_addr;
     logic        load_hit_wait;
     assign load_hit_now = (state == S_IDLE) && req && !wt_store && !is_store && line_present;
     always_ff @(posedge clk) begin
         if (rst) begin
             prev_load_hit <= 1'b0;
-            prev_addr     <= 32'd0;
+            prev_addr     <= XLEN'(0);
         end else begin
             prev_load_hit <= load_hit_now;
             prev_addr     <= addr;
@@ -291,7 +293,7 @@ module dcache #(
         mem_req        = 1'b0;
         mem_burst      = 1'b0;
         mem_byte_en    = 4'b0000;
-        mem_write_word = 32'd0;
+        mem_write_word = XLEN'(0);
         mem_addr       = addr;
 
         case (state)

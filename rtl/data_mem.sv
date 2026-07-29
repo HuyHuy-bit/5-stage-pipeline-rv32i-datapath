@@ -4,6 +4,8 @@
 // semantics into that. LATENCY is modelled by mem_timing, as for instr_mem.
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module data_mem #(
     parameter int LATENCY     = 1,
     parameter int DEPTH_WORDS = 16384
@@ -12,16 +14,16 @@ module data_mem #(
     input  var logic        rst,
     input  var logic        req,          // this cycle genuinely presents an access
     input  var logic        burst,        // requester is walking sequential words
-    input  var logic [31:0] addr,         // byte address
-    input  var logic [3:0]  byte_en,      // lanes to write (0 = this is a read)
-    input  var logic [31:0] write_word,   // already shifted into its lane
-    output var logic [31:0] read_word,
+    input  var logic [XLEN-1:0] addr,         // byte address
+    input  var logic [XBYTES-1:0] byte_en,      // lanes to write (0 = this is a read)
+    input  var logic [XLEN-1:0] write_word,   // already shifted into its lane
+    output var logic [XLEN-1:0] read_word,
     output var logic        ready
 );
     localparam int WORDW = $clog2(DEPTH_WORDS);
 
     // Word-addressed array; subword access handled via per-byte write strobes.
-    logic [31:0] mem_array [0:DEPTH_WORDS-1];
+    logic [XLEN-1:0] mem_array [0:DEPTH_WORDS-1];
 
 `ifndef SYNTHESIS
     string data_file;
@@ -52,14 +54,15 @@ module data_mem #(
 
     // A store commits only on the cycle its access completes, not on every
     // cycle it sits in MEM waiting for the memory to answer.
-    logic [3:0] we;
-    assign we = byte_en & {4{ready}};
+    logic [XBYTES-1:0] we;
+    assign we = byte_en & {XBYTES{ready}};
 
+    // Looped rather than four unrolled lanes: the lane count is XBYTES, and
+    // writing it out by hand is what pins a memory to one data width.
     always_ff @(posedge clk) begin
-        if (we[0]) mem_array[word_idx][7:0]   <= write_word[7:0];
-        if (we[1]) mem_array[word_idx][15:8]  <= write_word[15:8];
-        if (we[2]) mem_array[word_idx][23:16] <= write_word[23:16];
-        if (we[3]) mem_array[word_idx][31:24] <= write_word[31:24];
+        for (int b = 0; b < XBYTES; b++) begin
+            if (we[b]) mem_array[word_idx][8*b +: 8] <= write_word[8*b +: 8];
+        end
     end
 
     assign read_word = mem_array[word_idx];

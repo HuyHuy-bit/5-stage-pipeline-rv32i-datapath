@@ -18,6 +18,8 @@
 //   an access to the address already served is ready immediately
 `default_nettype none
 
+import rv32i_pkg::*;
+
 module mem_timing #(
     parameter int LATENCY = 1
 ) (
@@ -25,7 +27,7 @@ module mem_timing #(
     input  var logic        rst,
     input  var logic        req,     // an access is genuinely being presented
     input  var logic        burst,   // requester is walking sequential addresses
-    input  var logic [31:0] addr,
+    input  var logic [XLEN-1:0] addr,
     output var logic        ready
 );
     if (LATENCY <= 1) begin : g_fast
@@ -35,7 +37,7 @@ module mem_timing #(
         localparam int CW = $clog2(LATENCY + 1);
 
         logic [CW-1:0] cnt;          // stall cycles elapsed on the current access
-        logic [31:0]   served_addr;
+        logic [XLEN-1:0] served_addr;
         logic          served;
 
         // ponytail: re-presenting the address already served is free, which
@@ -43,7 +45,7 @@ module mem_timing #(
         // dead; in front of a bare CPU it only fires on a self-loop. Swap in an
         // explicit req/ack handshake if a measurement ever lands on it.
         logic seq;
-        assign seq   = burst && served && (addr == served_addr + 32'd4);
+        assign seq   = burst && served && (addr == served_addr + XLEN'(4));
         assign ready = !req || (served && (served_addr == addr));
 
         // served is a register, so it turns ready on the cycle AFTER the last

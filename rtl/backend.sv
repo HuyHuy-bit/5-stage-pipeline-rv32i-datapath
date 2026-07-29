@@ -24,15 +24,15 @@ module backend #(
     // Redirects and holds consumed by the front end.
     output var logic        load_use_stall,
     output var logic        ex_flush,
-    output var logic [31:0] ex_resolved_target,
+    output var logic [XLEN-1:0] ex_resolved_target,
     output var logic        trap_redirect,
-    output var logic [31:0] trap_target,
+    output var logic [XLEN-1:0] trap_target,
 
     // Predictor learning, from the EX-stage resolution.
     output var logic        bp_update_en,
-    output var logic [31:0] bp_update_pc,
+    output var logic [XLEN-1:0] bp_update_pc,
     output var logic        bp_update_taken,
-    output var logic [31:0] bp_update_target,
+    output var logic [XLEN-1:0] bp_update_target,
 
     output var logic        dmem_ready,       // 0 = data side is stalling the pipe
     output var logic        dcache_access,
@@ -45,8 +45,8 @@ module backend #(
     // Live counters, fed back in so mcycle/minstret can read them. They are
     // produced by perf_counters.sv at the top level because the front end
     // contributes to them too.
-    input  var logic [31:0] perf_cycle_count,
-    input  var logic [31:0] perf_instr_retired,
+    input  var logic [XLEN-1:0] perf_cycle_count,
+    input  var logic [XLEN-1:0] perf_instr_retired,
 
     input  var logic        dbg_flush,
     output var logic        dbg_flush_done
@@ -81,12 +81,13 @@ module backend #(
     // CSRRWI/CSRRSI/CSRRCI (funct3[2]==1) use a zero-extended 5-bit uimm from
     // the rs1 field instead of a register value.
     logic [11:0] csr_addr_id;
-    logic [31:0] csr_wdata_id;
+    logic [XLEN-1:0] csr_wdata_id;
     assign csr_addr_id  = if_id_q.instr[31:20];
-    assign csr_wdata_id = funct3_id[2] ? {27'd0, rs1_addr_id} : reg_rs1_data_id;
+    // CSRRWI/SI/CI zero-extend a 5-bit uimm to the datapath width.
+    assign csr_wdata_id = funct3_id[2] ? XLEN'(rs1_addr_id) : reg_rs1_data_id;
 
-    logic [31:0] reg_rs1_data_id, reg_rs2_data_id;
-    logic [31:0] write_back_data; // driven by WB stage, below
+    logic [XLEN-1:0] reg_rs1_data_id, reg_rs2_data_id;
+    logic [XLEN-1:0] write_back_data; // driven by WB stage, below
 
     reg_file u_reg_file (
         .clk(clk), .rst(rst),
@@ -95,11 +96,11 @@ module backend #(
         .rs1_data(reg_rs1_data_id), .rs2_data(reg_rs2_data_id)
     );
 
-    logic [31:0] imm_id;
+    logic [XLEN-1:0] imm_id;
     imm_gen u_imm_gen ( .instr(if_id_q.instr), .imm(imm_id) );
 
     // ID/EX register
-    logic [31:0] csr_rdata_ex;   // old CSR value, read combinationally in EX
+    logic [XLEN-1:0] csr_rdata_ex;   // old CSR value, read combinationally in EX
 
     // A taken branch/jump resolves in EX one cycle before this register would
     // otherwise latch the two wrong-path instructions behind it - flush next cycle.
@@ -170,10 +171,10 @@ module backend #(
     // instruction it's the old CSR value, otherwise the ALU result. Forwarding
     // must use THIS, not raw ex_mem_q.alu_result, or a CSR read forwarded to the
     // next instruction delivers garbage.
-    logic [31:0] mem_fwd_value;
+    logic [XLEN-1:0] mem_fwd_value;
     assign mem_fwd_value = ex_mem_q.is_csr ? csr_rdata_commit : ex_mem_q.alu_result;
 
-    logic [31:0] rs1_data_ex_fwd, rs2_data_ex_fwd;
+    logic [XLEN-1:0] rs1_data_ex_fwd, rs2_data_ex_fwd;
     always_comb begin
         case (forward_a)
             2'b01:   rs1_data_ex_fwd = mem_fwd_value;    // from EX/MEM (CSR-aware)
@@ -190,11 +191,11 @@ module backend #(
     // CSR write data must use the FORWARDED rs1 (register variants), else a
     // csrrw right after an instruction producing rs1 captures a stale value.
     // Immediate variants (funct3[2]==1) use the uimm carried from ID, hazard-free.
-    logic [31:0] csr_wdata_ex_fwd;
+    logic [XLEN-1:0] csr_wdata_ex_fwd;
     assign csr_wdata_ex_fwd = id_ex_q.funct3[2] ? id_ex_q.csr_wdata   // uimm (from ID, no hazard)
                                            : rs1_data_ex_fwd; // register variant (forwarded)
 
-    logic [31:0] alu_a_ex, alu_b_ex, alu_result_ex;
+    logic [XLEN-1:0] alu_a_ex, alu_b_ex, alu_result_ex;
     assign alu_a_ex = id_ex_q.ctrl.alu_a_src ? id_ex_q.pc : rs1_data_ex_fwd;
     assign alu_b_ex = id_ex_q.ctrl.alu_src   ? id_ex_q.imm : rs2_data_ex_fwd;
 
@@ -209,20 +210,20 @@ module backend #(
         .branch(id_ex_q.ctrl.branch), .pc_sel(branch_taken_ex)
     );
 
-    logic [31:0] branch_target_ex, jalr_target_ex;
+    logic [XLEN-1:0] branch_target_ex, jalr_target_ex;
     assign branch_target_ex = id_ex_q.pc + id_ex_q.imm;
-    assign jalr_target_ex   = (rs1_data_ex_fwd + id_ex_q.imm) & ~32'd1;
+    assign jalr_target_ex   = (rs1_data_ex_fwd + id_ex_q.imm) & ~XLEN'(1);
 
     // Resolve the actual control-flow outcome in EX.
     logic        actual_taken;      // did this instruction actually redirect?
-    logic [31:0] actual_target;     // ...and to where
+    logic [XLEN-1:0] actual_target;     // ...and to where
     logic        is_cf_instr;       // is this a control-flow instruction at all?
     always_comb begin
         case (id_ex_q.ctrl.pc_src)
             PC_SRC_BRANCH: begin actual_taken = branch_taken_ex; actual_target = branch_target_ex; is_cf_instr = 1'b1; end
             PC_SRC_JALR:   begin actual_taken = 1'b1;            actual_target = jalr_target_ex;   is_cf_instr = 1'b1; end
             PC_SRC_JAL:    begin actual_taken = 1'b1;            actual_target = branch_target_ex; is_cf_instr = 1'b1; end
-            default:       begin actual_taken = 1'b0;            actual_target = 32'd0;            is_cf_instr = 1'b0; end
+            default:       begin actual_taken = 1'b0;            actual_target = XLEN'(0);            is_cf_instr = 1'b0; end
         endcase
     end
 
@@ -234,20 +235,20 @@ module backend #(
     //   taken   -> actual_target
     //   not-taken (but predicted taken) -> the fall-through id_ex_q.pc + 4
     logic        mispredict;
-    logic [31:0] correct_next_pc;
+    logic [XLEN-1:0] correct_next_pc;
     always_comb begin
         if (actual_taken && id_ex_q.predicted_taken && (actual_target == id_ex_q.predicted_target)) begin
             mispredict      = 1'b0;                 // correctly predicted taken to the right place
             correct_next_pc = actual_target;
         end else if (!actual_taken && !id_ex_q.predicted_taken) begin
             mispredict      = 1'b0;                 // correctly predicted not-taken
-            correct_next_pc = id_ex_q.pc + 32'd4;
+            correct_next_pc = id_ex_q.pc + XLEN'(4);
         end else if (actual_taken) begin
             mispredict      = 1'b1;                 // should have gone taken (or to a different target)
             correct_next_pc = actual_target;
         end else begin
             mispredict      = 1'b1;                 // predicted taken but actually not-taken
-            correct_next_pc = id_ex_q.pc + 32'd4;
+            correct_next_pc = id_ex_q.pc + XLEN'(4);
         end
     end
 
@@ -258,7 +259,7 @@ module backend #(
     assign false_predict = id_ex_q.valid && !is_cf_instr && id_ex_q.predicted_taken;
 
     assign ex_flush           = (id_ex_q.valid && is_cf_instr && mispredict) || false_predict;
-    assign ex_resolved_target = false_predict ? (id_ex_q.pc + 32'd4) : correct_next_pc;
+    assign ex_resolved_target = false_predict ? (id_ex_q.pc + XLEN'(4)) : correct_next_pc;
 
     // Predictor learning: update on every resolved control-flow instruction.
     // Not while frozen - ID/EX holds, so the same branch would be presented
@@ -283,10 +284,10 @@ module backend #(
     // exceptions resolve in program order (precise). Part 2 adds misaligned
     // load/store here as well.
     logic        exc_pending_ex;
-    logic [31:0] exc_cause_ex;
+    logic [XLEN-1:0] exc_cause_ex;
     always_comb begin
         exc_pending_ex = 1'b0;
-        exc_cause_ex   = 32'd0;
+        exc_cause_ex   = XLEN'(0);
         if (id_ex_q.valid && id_ex_q.ctrl.illegal) begin
             exc_pending_ex = 1'b1;
             exc_cause_ex   = CAUSE_ILLEGAL_INSTR;
@@ -323,7 +324,7 @@ module backend #(
     // For a CSR instruction, the old value read from the CSR is produced by the
     // csr module at commit and routed straight into write-back; nothing to do
     // in EX. csr_rdata_ex is carried as 0 (unused) to keep the pipe regs simple.
-    assign csr_rdata_ex = 32'd0;
+    assign csr_rdata_ex = XLEN'(0);
 
     // EX/MEM register
 
@@ -369,12 +370,12 @@ ex_mem_t ex_mem_d, ex_mem_q;
     logic dmem_req;
     assign dmem_req = ex_mem_q.valid && (ex_mem_q.mem_read || ex_mem_q.mem_write) && !ex_mem_q.exc_pending;
 
-    logic [31:0] mem_read_data_mem;   // load result, extended, into MEM/WB
-    logic [3:0]  dm_byte_en;
-    logic [31:0] dm_store_word, dm_read_word;
+    logic [XLEN-1:0] mem_read_data_mem;   // load result, extended, into MEM/WB
+    logic [XBYTES-1:0] dm_byte_en;
+    logic [XLEN-1:0] dm_store_word, dm_read_word;
 
     lsu u_lsu (
-        .funct3(ex_mem_q.funct3), .byte_off(ex_mem_q.alu_result[1:0]),
+        .funct3(ex_mem_q.funct3), .byte_off(ex_mem_q.alu_result[XOFFW-1:0]),
         .mem_write(mem_write_mem_gated), .mem_read(ex_mem_q.mem_read),
         .store_data(ex_mem_q.rs2_data), .mem_word(dm_read_word),
         .byte_en(dm_byte_en), .store_word(dm_store_word),
@@ -382,8 +383,8 @@ ex_mem_t ex_mem_d, ex_mem_q;
     );
 
     // Data path: optionally through the D-cache, otherwise straight to memory.
-    logic [31:0] dc_mem_addr, dc_mem_write_word, dc_mem_read_word;
-    logic [3:0]  dc_mem_byte_en;
+    logic [XLEN-1:0] dc_mem_addr, dc_mem_write_word, dc_mem_read_word;
+    logic [XBYTES-1:0] dc_mem_byte_en;
     logic        dc_mem_req, dc_mem_burst, dc_mem_ready;
 
     if (DCACHE_BYTES == 0) begin : g_no_dcache
@@ -431,8 +432,8 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // exceptions for free: everything ahead has committed, everything behind
     // gets flushed.
     logic        trap_take;       // a trap fires this cycle
-    logic [31:0] trap_cause_w;
-    logic [31:0] trap_val_w;      // -> mtval: faulting address or instruction, if any
+    logic [XLEN-1:0] trap_cause_w;
+    logic [XLEN-1:0] trap_val_w;      // -> mtval: faulting address or instruction, if any
     logic        mret_take;       // an MRET commits this cycle
     logic        csr_commit;      // a CSR instruction commits its write this cycle
 
@@ -443,8 +444,8 @@ ex_mem_t ex_mem_d, ex_mem_q;
 
     always_comb begin
         trap_take    = 1'b0;
-        trap_cause_w = 32'd0;
-        trap_val_w   = 32'd0;
+        trap_cause_w = XLEN'(0);
+        trap_val_w   = XLEN'(0);
         mret_take    = 1'b0;
         csr_commit   = 1'b0;
 
@@ -462,9 +463,9 @@ ex_mem_t ex_mem_d, ex_mem_q;
                 // illegal CSR access), 0 for misaligned-fetch (the target
                 // isn't carried this far — spec permits mtval reading 0).
                 case (ex_mem_q.exc_cause)
-                    CAUSE_ILLEGAL_INSTR:                       trap_val_w = ex_mem_q.instr;
+                    CAUSE_ILLEGAL_INSTR:                       trap_val_w = XLEN'(ex_mem_q.instr);
                     CAUSE_MISALIGNED_LOAD, CAUSE_MISALIGNED_STORE: trap_val_w = ex_mem_q.alu_result;
-                    default: trap_val_w = 32'd0;
+                    default: trap_val_w = XLEN'(0);
                 endcase
             end else if (is_ecall_mem) begin
                 trap_take    = 1'b1;
@@ -480,7 +481,7 @@ ex_mem_t ex_mem_d, ex_mem_q;
         end
     end
 
-    logic [31:0] mtvec_val, mepc_val, csr_rdata_commit;
+    logic [XLEN-1:0] mtvec_val, mepc_val, csr_rdata_commit;
     csr u_csr (
         .clk(clk), .rst(rst),
         .csr_access(csr_commit),
@@ -505,7 +506,7 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // For a committing CSR instruction, the value written back to rd is the
     // OLD csr value. We fold it into the MEM-stage alu_result feeding MEM/WB,
     // since a CSR instruction doesn't use the ALU result for anything else.
-    logic [31:0] mem_result_for_wb;
+    logic [XLEN-1:0] mem_result_for_wb;
     assign mem_result_for_wb = mem_fwd_value;  // same value used for forwarding
 
     // MEM/WB register
@@ -562,12 +563,12 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // so a future formal flow can bind to it directly.
     // public_flat_rd: no RTL consumer, so Verilator would otherwise optimize
     // these away before the testbench could read them by hierarchy.
-    logic [31:0] rvfi_pc /* verilator public_flat_rd */;
-    logic [31:0] rvfi_insn /* verilator public_flat_rd */;
+    logic [XLEN-1:0] rvfi_pc /* verilator public_flat_rd */;
+    logic [ILEN-1:0] rvfi_insn /* verilator public_flat_rd */;
     always_ff @(posedge clk) begin
         if (rst) begin
-            rvfi_pc   <= 32'd0;
-            rvfi_insn <= 32'd0;
+            rvfi_pc   <= XLEN'(0);
+            rvfi_insn <= ILEN'(0);
         end else if (!pipe_stall) begin
             rvfi_pc   <= ex_mem_q.pc;
             rvfi_insn <= ex_mem_q.instr;
@@ -580,10 +581,10 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // per stalled cycle. This matches instret exactly, by construction.
     logic        rvfi_valid    /* verilator public_flat_rd */;
     logic [4:0]  rvfi_rd_addr  /* verilator public_flat_rd */;
-    logic [31:0] rvfi_rd_wdata /* verilator public_flat_rd */;
+    logic [XLEN-1:0] rvfi_rd_wdata /* verilator public_flat_rd */;
     assign rvfi_valid    = mem_wb_q.valid && !pipe_stall;
     assign rvfi_rd_addr  = (mem_wb_q.reg_write_en && mem_wb_q.rd_addr != 5'd0) ? mem_wb_q.rd_addr : 5'd0;
-    assign rvfi_rd_wdata = (rvfi_rd_addr != 5'd0) ? write_back_data : 32'd0;
+    assign rvfi_rd_wdata = (rvfi_rd_addr != 5'd0) ? write_back_data : XLEN'(0);
 `endif
 `ifndef SYNTHESIS
     // ---- Design invariants, checked every cycle of every test ----

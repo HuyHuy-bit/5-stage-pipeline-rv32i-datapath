@@ -17,7 +17,7 @@ module cpu #(
     // Reset vector. 0 for every normal build; the lockstep flow overrides it
     // so the RTL's PC matches the address Spike's memory map forces programs
     // to link at (see tools/lockstep.py).
-    parameter logic [31:0] RESET_PC  = 32'h0,
+    parameter logic [XLEN-1:0] RESET_PC  = '0,
     // Backing-memory depth. Defaults match the pre-parameterization sizes
     // (2MB instruction ROM, 64KB data RAM) so simulation is unaffected;
     // synthesis overrides these to fit a target device's BRAM budget - see
@@ -27,17 +27,17 @@ module cpu #(
 ) (
     input  var logic clk,
     input  var logic rst,
-    output var logic [31:0] perf_cycle_count,
-    output var logic [31:0] perf_instr_retired,
-    output var logic [31:0] perf_stall_count,
-    output var logic [31:0] perf_flush_count,
-    output var logic [31:0] perf_mispredict_count,
-    output var logic [31:0] perf_branch_count,
-    output var logic [31:0] perf_mem_stall_count,
-    output var logic [31:0] perf_icache_access,
-    output var logic [31:0] perf_icache_miss,
-    output var logic [31:0] perf_dcache_access,
-    output var logic [31:0] perf_dcache_miss,
+    output var logic [XLEN-1:0] perf_cycle_count,
+    output var logic [XLEN-1:0] perf_instr_retired,
+    output var logic [XLEN-1:0] perf_stall_count,
+    output var logic [XLEN-1:0] perf_flush_count,
+    output var logic [XLEN-1:0] perf_mispredict_count,
+    output var logic [XLEN-1:0] perf_branch_count,
+    output var logic [XLEN-1:0] perf_mem_stall_count,
+    output var logic [XLEN-1:0] perf_icache_access,
+    output var logic [XLEN-1:0] perf_icache_miss,
+    output var logic [XLEN-1:0] perf_dcache_access,
+    output var logic [XLEN-1:0] perf_dcache_miss,
     // Debug: drive high to write every dirty D-cache line back to memory, and
     // wait for dbg_flush_done. Only meaningful for a write-back D-cache, where
     // memory on its own no longer holds all of architectural state.
@@ -67,9 +67,9 @@ module cpu #(
 
     // Back-end -> front-end redirects.
     logic        load_use_stall, ex_flush, trap_redirect;
-    logic [31:0] ex_resolved_target, trap_target;
+    logic [XLEN-1:0] ex_resolved_target, trap_target;
     logic        bp_update_en, bp_update_taken;
-    logic [31:0] bp_update_pc, bp_update_target;
+    logic [XLEN-1:0] bp_update_pc, bp_update_target;
 
     // Counter observations.
     logic icache_miss, dcache_access, dcache_miss, retired, mispredicted;

@@ -17,7 +17,7 @@ module frontend #(
     parameter int ICACHE_WAYS        = 1,
     parameter int IMEM_LATENCY       = 1,
     parameter int IMEM_DEPTH_WORDS   = 524288,
-    parameter logic [31:0] RESET_PC  = 32'h0
+    parameter logic [XLEN-1:0] RESET_PC  = '0
 ) (
     input  var logic        clk,
     input  var logic        rst,
@@ -26,15 +26,15 @@ module frontend #(
     // Redirects and holds, all resolved in the back end.
     input  var logic        load_use_stall,
     input  var logic        ex_flush,
-    input  var logic [31:0] ex_resolved_target,
+    input  var logic [XLEN-1:0] ex_resolved_target,
     input  var logic        trap_redirect,
-    input  var logic [31:0] trap_target,
+    input  var logic [XLEN-1:0] trap_target,
 
     // Predictor learning, from the EX-stage resolution.
     input  var logic        bp_update_en,
-    input  var logic [31:0] bp_update_pc,
+    input  var logic [XLEN-1:0] bp_update_pc,
     input  var logic        bp_update_taken,
-    input  var logic [31:0] bp_update_target,
+    input  var logic [XLEN-1:0] bp_update_target,
 
     output var if_id_t      if_id_q,          // the decoded-stage payload
     output var logic        imem_ready,       // 0 = fetch is stalling the pipe
@@ -42,13 +42,15 @@ module frontend #(
 );
 
     // IF stage
-    logic [31:0] pc_out, next_pc, pc_plus4_if, instr_if;
+    logic [XLEN-1:0] pc_out, next_pc, pc_plus4_if;
+    logic [ILEN-1:0] instr_if;
 
     pc #(.RESET_PC(RESET_PC)) u_pc ( .clk(clk), .rst(rst), .next_pc(next_pc), .pc_out(pc_out) );
-    assign pc_plus4_if = pc_out + 32'd4;
+    assign pc_plus4_if = pc_out + XLEN'(4);
 
     // Fetch path: optionally through the I-cache, otherwise straight to memory.
-    logic [31:0] ic_mem_addr, ic_mem_instr;
+    logic [XLEN-1:0] ic_mem_addr;
+    logic [ILEN-1:0] ic_mem_instr;
     logic        ic_mem_req, ic_mem_burst, ic_mem_ready;
 
     if (ICACHE_BYTES == 0) begin : g_no_icache
@@ -82,7 +84,7 @@ module frontend #(
     // predicted-taken hit we redirect the very next fetch to the cached
     // target, so a correctly-predicted taken branch costs zero penalty.
     logic        predict_taken_if;
-    logic [31:0] predict_target_if;
+    logic [XLEN-1:0] predict_target_if;
 
     branch_predictor u_branch_predictor (
         .clk(clk), .rst(rst),
