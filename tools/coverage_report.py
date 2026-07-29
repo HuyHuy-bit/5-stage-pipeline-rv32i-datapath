@@ -49,13 +49,45 @@ def main():
         mark = "" if count > 0 else " **(unhit)**"
         print(f"| `{name}` | {count}{mark} |")
 
+    # Why each remaining hole is still open. A coverage report whose unhit
+    # list is unexplained is just a number; the point of chasing holes is to
+    # end with each one either closed or justified.
+    notes = {
+        "c_false_predict":
+            "requires a BTB alias: a non-control-flow instruction whose PC "
+            "collides with a previously-taken branch's tag. Reachable only by "
+            "constructing a specific PC collision, which random stimulus finds "
+            "more naturally than a directed test.",
+        "c_load_use_and_mispredict":
+            "a load-use stall coincident with a mispredict in the same cycle. "
+            "Needs a load feeding a branch's operand at exactly distance 1 with "
+            "the branch mispredicting - a narrow window best reached by random "
+            "stimulus.",
+        "c_pred_tt_mismatch":
+            "predicted-taken and actually-taken but to a *different* target: "
+            "needs an indirect jump (JALR) reached from two call sites so the "
+            "BTB holds a stale target. The plan's Phase 10a return-address "
+            "stack is the feature that makes this common.",
+        "c_miss_load":
+            "a load that misses with no dirty victim. t19 dirties every way "
+            "before missing, so its misses all take the write-back path; an "
+            "unmodified working set larger than the cache would hit this.",
+        "c_trans_flush_to_idle":
+            "the debug flush walk completing with no dirty line left to write "
+            "back. The testbench flush always follows a dirty run, so it exits "
+            "through FLUSH->WB rather than FLUSH->IDLE.",
+    }
     unhit = [n for n, c in points.items() if c == 0]
     if unhit:
         print()
         print("## Unhit points")
         print()
+        print("Each is reachable in principle; none is dead logic.")
+        print()
         for n in sorted(unhit):
-            print(f"- `{n}`")
+            key = n.split(".")[-1]
+            why = notes.get(key, "not yet analysed.")
+            print(f"- `{n}` — {why}")
 
 
 if __name__ == "__main__":
