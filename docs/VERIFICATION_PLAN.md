@@ -4,16 +4,16 @@ What's tested, by what mechanism, and what's explicitly not tested yet.
 
 | Mechanism | Scale | What it uniquely catches |
 |---|---|---|
-| Directed tests | 19 programs × 6 cache configs | The specific hazard/trap each was written for |
+| Directed tests | 22 programs × 6 cache configs | The specific hazard/trap each was written for |
 | Compliance suite | 38/38 `rv32i_m/I` | ISA conformance the author wouldn't think to target |
 | Spike lockstep | 38 programs, instruction-by-instruction | Right answer reached by the *wrong path* |
 | SVA assertions | 25 properties, every cycle | Invariant violations, in any test, immediately |
 | Functional coverage | 33/38 points (86.8%) | Scenarios nothing exercises |
-| Constrained-random | 1000 seeds vs. a reference model | Blind spots of whoever wrote the directed tests |
+| Constrained-random | 1000 seeds vs. a Python model; 100 vs. Spike | Blind spots of whoever wrote the directed tests |
 
 ## Directed tests (`tests/`, run via `make all`)
 
-19 hand-assembled programs, one per hazard/instruction-class/trap scenario: R-type, I-type, memory, branch, jump, LUI/AUIPC, load-use stall, loop, illegal instruction, misaligned load/store/fetch, MRET, CSR read/write, CSR permission traps, timer interrupt, MRET-from-interrupt, ECALL/EBREAK, and D-cache dirty eviction. Each checks final register state against a `.ref` file, across the 6-configuration cache matrix — the result must be identical in all 6, since cache configuration is not architecturally visible.
+22 hand-assembled programs, one per hazard/instruction-class/trap scenario: R-type, I-type, memory, branch, jump, LUI/AUIPC, load-use stall, loop, illegal instruction, misaligned load/store/fetch, MRET, CSR read/write, CSR permission traps, timer interrupt, MRET-from-interrupt, ECALL/EBREAK, D-cache dirty eviction, RAS multi-caller returns, gshare-correlated branches, and FENCE.I. Each checks final register state against a `.ref` file, across the 6-configuration cache matrix — the result must be identical in all 6, since cache configuration is not architecturally visible.
 
 Every test ends by storing to a reserved address (`tohost`, the riscv-tests convention); the run stops there and the stored value is the exit code. This replaced a `same_pc >= 6` heuristic that inferred completion from the PC not moving — which cannot distinguish "finished" from "spinning on a lock", "stalled on slow memory", or "stuck", and made every legitimately-looping test a guess. Completion is detected where the store *commits* rather than by watching memory, so it behaves identically with a write-back cache holding the value dirty.
 
@@ -38,7 +38,7 @@ The RTL exposes an RVFI-style trace at WB (`rvfi_*` in `backend.sv`), simulation
 Both machines run the *same ELF*. Spike reserves low memory, so `compliance/link/spike-lockstep.ld` relocates to `0x80000000`; the RTL's memories decode only their low address bits, so that image aliases back to the same words, and only the reset vector needs adjusting (`RESET_PC`).
 
 **Catches:** the "right answer via the wrong path" class — wrong forwarding masked by a dead value, a flush that squashes one instruction too many, a stale CSR read nobody observes. This is what made the Phase 7 refactor safe to attempt.
-**Doesn't catch:** anything outside the 38 programs; it is not yet wired to random stimulus.
+**Doesn't catch:** anything outside these 38 programs — though the same harness is now also driven by random stimulus, see below.
 
 ## SVA assertions
 
@@ -55,15 +55,18 @@ Verilator doesn't support covergroups; `cover property` is the supported equival
 
 Each of the five remaining holes is annotated in `docs/coverage.md` with *why* it is still open — none is dead logic. They need either a BTB tag collision, a load-use/mispredict coincidence, or an indirect-jump target mismatch, all of which random stimulus reaches more naturally than a directed test.
 
-## Constrained-random (`make soak`)
+## Constrained-random, two flows
 
-`tools/rand_gen.py` emits random ALU/load-store programs; `tools/rv32i_model.py` is a small Python reference model that computes the expected result. **1000 seeds pass clean** against both cacheless and cache-enabled builds.
+**`make soak`** — `tools/rand_gen.py` emits random ALU/load-store programs; `tools/rv32i_model.py` is a small Python reference model that computes the expected result. **1000 seeds pass clean** against both cacheless and cache-enabled builds. Compares final register state.
 
-**Doesn't catch:** branches, jumps, traps, interrupts, or CSRs — out of the model's scope. Don't read "1000/1000 passed" as "random testing verifies control flow". Pointing the generator at Spike instead of the Python model would remove this limit entirely and is the obvious next step.
+**`make soak-lockstep`** — the same generator pointed at Spike instead (`--spike` mode, `tools/soak_lockstep.sh`). Because Spike is a full ISA implementation rather than a 90-line model, this flow *can* generate branches and jumps — ~13% of emitted instructions — and it compares **per retirement** rather than on final state. **100 seeds × 60 instructions pass clean.** Control flow under random stimulus was the single largest hole in this project's verification and this is what closes it.
+
+Getting it working surfaced a non-obvious hazard worth recording: the two machines do not start from the same architectural state. Spike enters through a boot ROM at `0x1000` that leaves residue in `x5`/`a0`/`a1` before jumping to the program, while the RTL comes out of reset all-zero. Hand-written compliance tests never notice because they initialise their own registers; randomly generated code reads whatever is there and diverges for a reason that has nothing to do with the DUT. The generator now emits an explicit register-init prologue. The first divergence this flow ever reported was that, not an RTL bug — which is itself the point: a lockstep harness that has never reported a divergence hasn't been shown to be able to.
+
+**Still doesn't catch:** traps, interrupts, or CSR sequences under random stimulus — generating those meaningfully requires the generator to model privilege state, not just emit instructions. Those remain directed-test and compliance-suite territory.
 
 ## Not yet done
 
-- **Random stimulus through lockstep.** The generator and the Spike harness both exist but aren't connected; joining them would extend random coverage to the full ISA including control flow and traps.
-- **Interrupt testing under random stimulus.** Interrupts are covered by directed tests only.
+- **Trap/CSR/interrupt generation under random stimulus.** Control flow is covered now (`make soak-lockstep`); privileged sequences are not, and need the generator to model privilege state rather than just emit instructions.
 - **Formal.** The RVFI port makes a formal flow (e.g. riscv-formal) bindable, but none is set up.
 - **Timing closure.** Nothing here says whether the design meets timing; see the synthesis section of `docs/MICROARCHITECTURE.md`.

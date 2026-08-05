@@ -2,7 +2,7 @@
 
 ## Overview and design goals
 
-A 5-stage in-order RV32I pipeline optimized for **measurable trade-offs over raw performance**: every major design choice below has a cheaper or faster alternative that was deliberately not taken, and the point of the project is to state what it cost. It is not optimized for area, power, or clock frequency (see Synthesis for what it does cost on a real device) — and it deliberately does not implement interrupts, `FENCE.I`, or any extension beyond base RV32I.
+A 5-stage in-order RV32I pipeline optimized for **measurable trade-offs over raw performance**: every major design choice below has a cheaper or faster alternative that was deliberately not taken, and the point of the project is to state what it cost. It is not optimized for area, power, or clock frequency (see Synthesis for what it does cost on a real device). Interrupts and `FENCE.I` are implemented; nothing beyond base RV32I is.
 
 ## Pipeline organization
 
@@ -69,6 +69,25 @@ None of the five C benchmark kernels in `bench/` exercise multi-site calls meani
 
 Bimodal lands near chance (49.2%) because it genuinely cannot see the correlation — its one counter per PC has no way to distinguish "branch 1 was just taken" from "branch 1 was just not-taken" contexts for branch 2. Off by default because real code's branch-correlation profile varies enough that it isn't a strict win the way the RAS is — it's a real, measured option, not a default recommendation, which is exactly why the plan called for it to be selectable rather than always-on.
 
+### FENCE.I as a commit-point redirect, not a pipeline-local flush
+
+**Chosen:** `FENCE.I` is decoded in `control.sv`, carried to MEM like any other instruction, and handled at the *same single commit point* as traps, MRET and interrupts. Committing it does two things: pulse `icache_invalidate` (clearing every valid bit in `icache.sv`), and redirect the PC to `pc+4`.
+
+**Why the redirect is the load-bearing half:** invalidating the cache alone would be wrong. By the time `FENCE.I` reaches MEM, the four instructions behind it have already been *fetched* — possibly from the very cache lines being invalidated. Dropping the cache without discarding those in-flight fetches leaves exactly the stale instructions the fence was executed to get rid of. Routing it through the existing commit-point redirect gets the flush for free and keeps every ordering guarantee the trap path already proves.
+
+**Why the invalidate can't collide with a refill:** the commit point is gated on `!pipe_stall`, and an in-progress refill holds `imem_ready` low — which *is* `pipe_stall`. So `invalidate` is structurally unable to fire mid-refill, and `icache.sv` doesn't need abort logic for a case that can't occur. This is asserted indirectly by `a_commit_onehot`, which now includes `fencei_take`.
+
+**Cost — and an honest limit.** Measured on an identical loop, 20 iterations, 1KB 4-way I-cache:
+
+| | I-cache accesses | misses | hit rate | CPI |
+|---|---|---|---|---|
+| loop body without `fence.i` | 71 | 3 | 95.8% | 2.95 |
+| loop body with `fence.i` | 151 | 43 | 71.5% | 10.43 |
+
+That is the invalidation demonstrably working — roughly two extra misses per iteration, and a 3.5× CPI penalty for discarding the cache every time round.
+
+What this core **cannot** demonstrate is `FENCE.I` doing its actual job. `instr_mem.sv` and `data_mem.sv` are separate arrays — a Harvard split, not merely split caches over unified memory — so a store can never reach code space at all, and self-modifying code isn't expressible here with or without the fence. The instruction is implemented because it's part of the ISA and its cache-invalidate semantics are real and testable; the coherence problem it exists to solve is gated behind a unified memory this design doesn't have. Worth stating plainly rather than letting "FENCE.I implemented" imply more than it delivers.
+
 ### A structural read-only-CSR convention, not a hand-maintained permission table
 **Chosen:** CSR write permission is derived from address bits `[11:10] == 2'b11` (the standard RISC-V convention), rather than a per-CSR read/write flag. **Cost:** none found — this is a case where following the spec's own structural convention was strictly simpler than the alternative, not a trade-off with a real downside.
 
@@ -131,6 +150,19 @@ WARNING: [Synth 8-6849] Infeasible attribute ram_style = "block" set for RAM
 ```
 
 The cause: each way's `always_ff` wrote *two different addresses* — `idx*BLOCK_WORDS + off` for a byte-enabled store, `idx*BLOCK_WORDS + fill_word` for a refill word. A BRAM write port physically has one address input, so no amount of `ram_style="block"` can force it. Muxing address/data/byte-enable ahead of the port (which is what the hardware does anyway) is what finally produced `256 x 32` true-dual-port RAMB18s — one per way, write on port A, read on port B — and bought a further 2,869 LUTs and ~4 MHz on top.
+
+### The same pattern applied to the I-cache
+
+`icache.sv` kept its original `[WAYS][SETS][BLOCK_WORDS]` array long after the D-cache was reworked, on the reasoning that it already fit the device. Applying the proven pattern to it — measured against a control build of the *identical current RTL* with only the array structure reverted, so nothing else that changed in between is credited to it:
+
+| 1KB 4-way I-cache | LUT | FF | BRAM | WNS | fmax |
+|---|---|---|---|---|---|
+| `[WAYS][SETS][BLOCK_WORDS]` | 10,760 (52%) | 15,183 (37%) | 0 | −12.424 ns | 69.3 MHz |
+| per-way flat + `ram_style="block"` | 5,029 (24%) | 6,942 (17%) | 4 × RAMB18 | −11.142 ns | 76.1 MHz |
+
+It is strictly simpler than the D-cache version, for a structural reason: this cache is read-only on the hit path, so a refill is the *only* writer. The "one physical write address per BRAM port" constraint that forced `dcache.sv` into a unified write mux is satisfied here by construction, and no mux is needed at all.
+
+**The frequency result is the interesting one.** +9.8% fmax, against +0.45% from the deliberate, targeted timing optimization documented below. A change made for *area* delivered roughly twenty times the frequency improvement that the change made for *timing* did. That isn't a coincidence, and it isn't an argument against doing timing analysis — it's confirmation of what the timing analysis concluded: this build is congestion-bound, not logic-depth-bound. Removing 8,241 flip-flops from the fabric relieves routing pressure across the whole design, which is precisely the constraint a shorter critical path can't address. The right response to "congestion-bound" is to make the design smaller, not to keep shortening chains.
 
 The general lesson, worth more than the numbers: **`ram_style="block"` is a request, not an instruction.** When synthesis declines it, it says so in a warning that's easy to miss in a 60,000-line log, and the reason is usually that the RTL is asking for something a BRAM port cannot physically do.
 

@@ -20,7 +20,8 @@ Next-PC priority: `freeze > trap > mispredict > load-use stall > predict > +4`. 
 | **CSRs** | `mstatus` `mie` `mip` `mtvec` `mepc` `mcause` `mscratch` `mtval` `misa` `mvendorid` `marchid` `mimpid` `mhartid` `mcycle` `minstret` |
 | **Caches** | Parameterised I$ and D$ — capacity, block size, associativity, write-through/no-allocate or write-back/write-allocate |
 | **Interrupts** | `mstatus` MIE/MPIE/MPP stack, `mie`/`mip`, timer (`mtime`/`mtimecmp`) and software interrupts |
-| **Not implemented** | `FENCE.I`, external interrupts, any extension beyond base I |
+| **Memory ordering** | `FENCE` is a no-op (in-order, single hart); `FENCE.I` invalidates the I-cache and refetches |
+| **Not implemented** | External interrupts, any extension beyond base I |
 
 ## Synthesis
 
@@ -29,11 +30,22 @@ Out-of-context synth → place → route, Vivado 2025.2, target `xc7a35ticsg324-
 | Config | fmax | LUT | FF | BRAM |
 |---|---|---|---|---|
 | core only | 75.3 MHz | 3,990 (19%) | 4,966 (12%) | 0 |
-| + 1KB I$ (4-way) | 76.7 MHz | 10,530 (51%) | 14,891 (36%) | 0 |
-| + 4KB D$ write-through | 76.2 MHz | 14,237 (68%) | 21,545 (52%) | 4 × RAMB18 |
-| + 4KB D$ write-back | 75.8 MHz | 14,850 (71%) | 21,500 (52%) | 4 × RAMB18 |
+| + 1KB I$ (4-way) | 76.1 MHz | 5,029 (24%) | 6,942 (17%) | 4 × RAMB18 |
+| + 4KB D$ write-through † | 76.2 MHz | 14,237 (68%) | 21,545 (52%) | 4 × RAMB18 |
+| + 4KB D$ write-back † | 75.8 MHz | 14,850 (71%) | 21,500 (52%) | 4 × RAMB18 |
+
+† The two D-cache rows predate both the current RTL and the I-cache rework below, and their I-cache is still the flip-flop version — so they overstate LUT/FF for the design as it stands. The first two rows are freshly measured.
 
 Getting the D-cache to fit took four RTL revisions, and the intermediate results were the lesson: a registered read alone changed nothing (316% → 315% LUT); splitting the `[WAYS][SETS][BLOCK_WORDS]` array into per-way flat arrays did the real work (→ 82%); and `ram_style="block"` was *refused* until the two write addresses in one `always_ff` were muxed into one — a BRAM port has a single address input. Full progression in [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md#synthesis).
+
+**Getting the I-cache into Block RAM was worth more than the timing work.** Applying the D-cache's per-way-flat-array pattern to `icache.sv` — measured against a control build that is identical current RTL with only the array structure reverted, so this is the restructuring alone and not the other changes since:
+
+| 1KB 4-way I$ | LUT | FF | BRAM | fmax |
+|---|---|---|---|---|
+| `[WAYS][SETS][BLOCK_WORDS]` array | 10,760 (52%) | 15,183 (37%) | 0 | 69.3 MHz |
+| per-way flat + `ram_style="block"` | **5,029 (24%)** | **6,942 (17%)** | **4 × RAMB18** | **76.1 MHz** |
+
+53% fewer LUTs, 54% fewer flip-flops, and **+9.8% fmax** — about twenty times the frequency gain the deliberate timing optimization below produced. That ordering is the actual lesson: the earlier timing pass concluded this build was congestion-bound rather than logic-depth-bound, and this confirms it directly, because moving 8,241 flip-flops out of the fabric relieved exactly the congestion that a shorter logic path couldn't.
 
 The core-only row dropped from an earlier 79.2 MHz once interrupt support added a 64-bit `mtime`/`mtimecmp` comparator, which `report_timing` showed dominating the worst path (a 6-`CARRY4` ripple chain feeding straight through `irq_pending` into the PC redirect mux). Registering that comparison — one cycle of interrupt latency, which RISC-V doesn't bound — cut the chain to 3 `CARRY4` and recovered +0.34 MHz; the net gain was small because a second, route-dominated path immediately became the new worst case, meaning this build is congestion-bound rather than logic-depth-bound at this size. Detail and the real before/after `report_timing` data in [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md#one-measured-timing-optimization).
 
@@ -63,13 +75,13 @@ Three findings from the geometry sweeps (measured pre-BRAM-rework; the qualitati
 
 | Mechanism | Coverage |
 |---|---|
-| Directed tests | 21, one per hazard/instruction-class/trap/predictor scenario; `tohost` end-of-test |
+| Directed tests | 22, one per hazard/instruction-class/trap/predictor scenario; `tohost` end-of-test |
 | Compliance | `riscv-arch-test` `rv32i_m/I` — **38/38** |
 | Spike lockstep | Same 38, compared instruction-by-instruction — **38/38** |
 | CI matrix | Directed suite × 6 cache/latency configs per push; result must be invariant to cache config |
 | Assertions | 25 SVA properties, live in every build via `--assert` |
 | Functional coverage | 38 cover points, 33 hit (86.8%) — [`docs/coverage.md`](docs/coverage.md) |
-| Constrained-random | 1000 seeds vs. a Python reference model, ALU/load-store subset |
+| Constrained-random | 1000 seeds vs. a Python model (ALU/load-store); **100 seeds vs. Spike** with branches/jumps, compared per-retirement |
 | Lint | `verilator -Wall` clean, waivers justified in [`rtl/verilator.vlt`](rtl/verilator.vlt) |
 
 See [`docs/VERIFICATION_PLAN.md`](docs/VERIFICATION_PLAN.md) for what each mechanism catches and what it explicitly doesn't.
@@ -82,8 +94,9 @@ Requires **Verilator**; the compliance suite also needs the **RISC-V GNU toolcha
 make all        # build + run directed tests (assertions live)
 make bench      # C kernels, CPI table
 make coverage   # functional coverage report
-make soak SEEDS=1000
-make lockstep    # compare against Spike instruction-by-instruction
+make soak SEEDS=1000            # random programs vs. the Python model
+make lockstep                  # compliance suite vs. Spike, per retirement
+make soak-lockstep SEEDS=100   # random programs vs. Spike, with control flow
 ```
 
 Cache geometry is a set of RTL parameters, so each configuration is its own build:
@@ -103,6 +116,7 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 - **Passing your own tests and being *correct* are different claims.** The compliance suite exists because directed tests, however careful, reflect the blind spots of whoever wrote them. Running against an external, independently-generated reference is what turns "I believe this works" into "this is verified."
 - **A test that ends by guessing isn't a test.** Runs used to stop when the PC stopped moving, which cannot tell "finished" from "spinning" or "stalled". Switching to a `tohost` store made termination deterministic — and immediately broke eight tests, because inserting those instructions shifted every trap handler they located by a hardcoded byte offset. The heuristic had been hiding how fragile the tests were.
 - **Simulation hides the cost of memory.** A combinational array read is free in Verilator and impossible in a Block RAM. Synthesis turned a "1.18 CPI" cache into a 2.3 CPI cache and a silent 3.2×-over-budget design into one that fits — neither fact was visible from any amount of simulation.
+- **When a design is congestion-bound, the area fix *is* the timing fix.** Registering a 64-bit comparator on the reported critical path bought +0.45% fmax. Moving the I-cache array into Block RAM — done for area, not timing — bought +9.8%, because freeing 8,241 flip-flops relieved the routing pressure that was the real limit. Reading the constraint correctly mattered more than optimizing the thing the timing report named.
 - **An interrupt and a trap resume at different addresses, and that's easy to get backwards.** A trap re-runs the faulting instruction (`mepc = pc`); an interrupt lets the instruction in flight complete and resumes after it (`mepc = pc+4`). Swap them and every interrupt either duplicates or silently drops one instruction — invisible in any test that doesn't specifically check `mepc` against the *right* one of those two.
 - **A "critical path" name in a synthesis report isn't automatically the real one.** The first re-synthesis after adding interrupts pointed at a plausible-looking chain (a 64-bit timer comparator feeding the PC redirect mux); fixing it *did* measurably shrink that exact chain (logic delay ↓31%, carry-chain length halved) but moved fmax by only +0.45%, because a second, route-dominated path was waiting to take over. The fix was real and worth keeping; the lesson is that "the" bottleneck in a small, congested build is often several similarly-bad paths, not one.
 
@@ -110,8 +124,8 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 
 - **fmax is a working number, not a good one.** ~75–77 MHz with one small timing optimization attempted (registering the interrupt timer comparator, +0.45%): no retiming of the tag-compare/way-select path, no shortening of the redirect priority chain, and this build appears congestion-bound rather than logic-depth-bound, so the next win likely isn't another single-chain fix.
 - **The pipeline freezes globally on a memory stall** rather than letting the back end drain through a fetch miss. It inflates cached and uncached numbers alike, so it doesn't manufacture a speedup — but a decoupled front end would make the I-cache look less essential than it does here.
-- **The I-cache and backing memories still don't use Block RAM.** The D-cache pattern applies directly; not done because the I-cache already fit.
-- **No `FENCE.I`.** Split I$/D$ with no coherence, so self-modifying code can read stale instructions. No test or benchmark here does that.
-- **Random testing covers ALU/load-store only** — no branches, traps, or CSRs, because the Python reference model doesn't interpret them. Spike lockstep exists now (`make lockstep`, 38/38) but runs the fixed compliance programs, not random ones; closing this gap means pointing the random generator at Spike instead of the Python model, not adding lockstep itself.
+- **The backing memories still don't use Block RAM.** The I-cache now does (see Synthesis); `instr_mem.sv`/`data_mem.sv` still read combinationally, which is what keeps them in flip-flops. Same fix applies, not done because they're a simulation-scale stand-in for real memory rather than part of the core.
+- **`FENCE.I` works, but this core can't demonstrate what it's for.** It decodes, invalidates the I-cache, and refetches — measurably: an identical loop goes from 3 I-cache misses to 43 with a `fence.i` in the body. What it can't show is self-modifying code becoming visible, because `instr_mem.sv` and `data_mem.sv` are *separate arrays* (a Harvard split), so a store never reaches code space at all — with or without `FENCE.I`. Unifying them is the prerequisite, and it's a memory-system change, not an ISA one.
+- **Random testing still excludes traps and CSRs.** `make soak-lockstep` now generates branches and jumps (13% of emitted instructions) and compares against Spike retirement-by-retirement, so control flow is no longer the blind spot it was — but trap-taking and CSR sequences are still directed-test-only, because generating them randomly needs the generator to model privilege state, not just instructions.
 
 [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md) has the full spec: every trade-off with its measured cost, the hazard/exception model, and the complete synthesis progression.
