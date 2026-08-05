@@ -28,12 +28,14 @@ Out-of-context synth → place → route, Vivado 2025.2, target `xc7a35ticsg324-
 
 | Config | fmax | LUT | FF | BRAM |
 |---|---|---|---|---|
-| core only | 79.2 MHz | 3,990 (19%) | 4,966 (12%) | 0 |
+| core only | 75.3 MHz | 3,990 (19%) | 4,966 (12%) | 0 |
 | + 1KB I$ (4-way) | 76.7 MHz | 10,530 (51%) | 14,891 (36%) | 0 |
 | + 4KB D$ write-through | 76.2 MHz | 14,237 (68%) | 21,545 (52%) | 4 × RAMB18 |
 | + 4KB D$ write-back | 75.8 MHz | 14,850 (71%) | 21,500 (52%) | 4 × RAMB18 |
 
 Getting the D-cache to fit took four RTL revisions, and the intermediate results were the lesson: a registered read alone changed nothing (316% → 315% LUT); splitting the `[WAYS][SETS][BLOCK_WORDS]` array into per-way flat arrays did the real work (→ 82%); and `ram_style="block"` was *refused* until the two write addresses in one `always_ff` were muxed into one — a BRAM port has a single address input. Full progression in [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md#synthesis).
+
+The core-only row dropped from an earlier 79.2 MHz once interrupt support added a 64-bit `mtime`/`mtimecmp` comparator, which `report_timing` showed dominating the worst path (a 6-`CARRY4` ripple chain feeding straight through `irq_pending` into the PC redirect mux). Registering that comparison — one cycle of interrupt latency, which RISC-V doesn't bound — cut the chain to 3 `CARRY4` and recovered +0.34 MHz; the net gain was small because a second, route-dominated path immediately became the new worst case, meaning this build is congestion-bound rather than logic-depth-bound at this size. Detail and the real before/after `report_timing` data in [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md#one-measured-timing-optimization).
 
 ## Performance
 
@@ -104,7 +106,7 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 
 ## Limitations
 
-- **fmax is a working number, not a good one.** ~76–79 MHz with zero timing optimization attempted: no retiming, no pipelining of the tag-compare/way-select path, no shortening of the redirect priority chain.
+- **fmax is a working number, not a good one.** ~75–77 MHz with one small timing optimization attempted (registering the interrupt timer comparator, +0.45%): no retiming of the tag-compare/way-select path, no shortening of the redirect priority chain, and this build appears congestion-bound rather than logic-depth-bound, so the next win likely isn't another single-chain fix.
 - **The pipeline freezes globally on a memory stall** rather than letting the back end drain through a fetch miss. It inflates cached and uncached numbers alike, so it doesn't manufacture a speedup — but a decoupled front end would make the I-cache look less essential than it does here.
 - **The I-cache and backing memories still don't use Block RAM.** The D-cache pattern applies directly; not done because the I-cache already fit.
 - **No `FENCE.I`.** Split I$/D$ with no coherence, so self-modifying code can read stale instructions. No test or benchmark here does that.

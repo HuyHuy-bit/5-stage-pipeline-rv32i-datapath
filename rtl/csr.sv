@@ -59,12 +59,22 @@ module csr (
     logic mip_msip;                 // software interrupt: set by software
     logic [XLEN-1:0] mie_val, mip_val;
 
-    // Timer. mtime free-runs; MTIP is a comparison, not a stored bit, exactly
-    // as the spec defines it - which is why writing mtimecmp is what clears
-    // the interrupt, and there is no "acknowledge" path.
+    // Timer. mtime free-runs; MTIP is a comparison against it, not a stored
+    // bit, exactly as the spec defines it - which is why writing mtimecmp is
+    // what clears the interrupt, and there is no "acknowledge" path.
+    //
+    // The comparison itself is registered rather than combinational. A 64-bit
+    // magnitude compare recomputed unconditionally every cycle is a full-width
+    // carry chain, and left combinational it sat on the same-cycle path all
+    // the way through irq_pending/irq_take to the PC redirect mux - measured
+    // as the design's actual worst path post-route (~75MHz, dominated by this
+    // comparator). Registering it costs one cycle of interrupt-recognition
+    // latency, which is free to spend: RISC-V doesn't bound how quickly a
+    // pending interrupt must be taken, so this is exactly the registered-mip
+    // convention a real timer/CLINT implementation already uses.
     logic [63:0] mtime, mtimecmp;
-    logic mip_mtip;
-    assign mip_mtip = (mtime >= mtimecmp);
+    logic mip_mtip_next, mip_mtip;
+    assign mip_mtip_next = (mtime >= mtimecmp);
 
     always_comb begin
         mie_val = XLEN'(0);
@@ -148,9 +158,11 @@ module csr (
             mip_msip        <= 1'b0;
             mtime           <= 64'd0;
             mtimecmp        <= '1;        // never fires until software sets it
+            mip_mtip        <= 1'b0;
         end else begin
             // mtime free-runs regardless of everything else below.
-            mtime <= mtime + 64'd1;
+            mtime    <= mtime + 64'd1;
+            mip_mtip <= mip_mtip_next;
 
         if (trap_en) begin
             mepc   <= trap_pc;

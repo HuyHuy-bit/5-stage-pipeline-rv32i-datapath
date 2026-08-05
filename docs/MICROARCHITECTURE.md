@@ -75,10 +75,12 @@ Out-of-context synthesis and implementation (synth → opt → place → route) 
 
 | Config | Result | fmax | LUT | FF | BRAM |
 |---|---|---|---|---|---|
-| core only (no caches) | Routed | ~79 MHz | 3,990 / 20,800 (19%) | 4,966 / 41,600 (12%) | 0 / 50 |
+| core only (no caches) | Routed | 74.97 MHz | 3,990 / 20,800 (19%) | 4,966 / 41,600 (12%) | 0 / 50 |
 | + 1KB I-cache (4-way) | Routed | ~77 MHz | 10,530 / 20,800 (51%) | 14,891 / 41,600 (36%) | 0 / 50 |
 | + 4KB D-cache, write-through | Routed | 76.2 MHz | 14,237 / 20,800 (68%) | 21,545 / 41,600 (52%) | 4 × RAMB18 |
 | + 4KB D-cache, write-back | Routed | 75.8 MHz | 14,850 / 20,800 (71%) | 21,500 / 41,600 (52%) | 4 × RAMB18 |
+
+The core-only row is a fresh re-measurement, taken after interrupts/`mstatus`/XLEN landed; the three cache rows predate that work and haven't been re-synthesized against the current RTL, so treat them as the last known-good numbers for the cache hierarchy specifically, not as directly comparable to the core-only row above. (The core-only figure also dropped from the ~79 MHz an earlier revision reported, for the mechanistic reason below — interrupt support added real combinational logic to what's now the worst path.)
 
 Getting the D-cache rows to exist at all took two rounds of RTL work, and the intermediate measurements are more instructive than the final table:
 
@@ -105,6 +107,19 @@ The cause: each way's `always_ff` wrote *two different addresses* — `idx*BLOCK
 The general lesson, worth more than the numbers: **`ram_style="block"` is a request, not an instruction.** When synthesis declines it, it says so in a warning that's easy to miss in a 60,000-line log, and the reason is usually that the RTL is asking for something a BRAM port cannot physically do.
 
 One honest caveat on the fmax figures: the reported critical paths (`report_timing`'s worst-path listings) show a source/destination pairing — e.g. a performance-counter register driving into the PC register — that isn't a real architectural dependency. This is very likely an artifact of out-of-context synthesis with a dozen `perf_*`/`dbg_*` outputs that don't feed anything beyond the module boundary, giving the optimizer freedom to share resources in ways that produce confusing endpoint names. The fmax *numbers* are real (they're what the implemented netlist's static timing analysis actually computed), but attributing the bottleneck to a specific named stage would be overclaiming past what this data supports. A synthesis run with the perf/debug ports genuinely connected to something (a real SoC integration, or at minimum a register slice deliberately intended to consume them) would give cleaner attribution.
+
+### One measured timing optimization
+
+The caveat above turned out to be only half the story. Re-synthesizing the core-only config after interrupt support landed, `report_timing`'s top 5 worst paths all shared one real, consistent source (`u_perf/cycle_count_reg`) and routed through `mtimecmp`/`mtime` comparison logic before reaching their (still confusingly-named) destinations — 6 of the path's 17 logic levels were `CARRY4` cells, the signature of a wide ripple-carry chain. That's `mip_mtip = (mtime >= mtimecmp)` in `csr.sv`: a 64-bit magnitude comparison, recomputed combinationally every cycle regardless of whether an interrupt is even enabled, feeding straight through `irq_pending` → `irq_take` into the next-PC redirect mux.
+
+The fix is a one-line, well-precedented change: register the comparison instead of leaving it combinational (`rtl/csr.sv`). RISC-V doesn't bound interrupt response latency, so spending one cycle to let `mip.MTIP` settle is free architecturally — it's the same registered-timer-pending convention a real CLINT implementation uses. Measured, same core-only config, same seed:
+
+| | WNS | fmax | Worst-path `CARRY4` | Worst-path logic delay |
+|---|---|---|---|---|
+| Before | −11.339 ns | 74.97 MHz | 6 | 3.729 ns |
+| After | −11.279 ns | 75.31 MHz | 3 | 2.557 ns |
+
+The targeted mechanism shrank exactly as predicted — logic delay on the worst path dropped 31%, `CARRY4` count halved — but the net fmax gain is only **+0.34 MHz (+0.45%)**, because a second, nearly-as-expensive path (route-delay-dominated: 79.75% route vs. 70.6% before) immediately took over as the new worst case. That's the honest result, not a disappointing one: this out-of-context build at this size is routing/congestion-bound, not logic-depth-bound, so fixing one specific chain reliably surfaces the next-worst one rather than moving fmax by the full amount the fixed chain's cost would suggest. A real win here would need either a less congested/larger device or a placement-aware pass, neither of which is "one optimization."
 
 Revised reading of the CPI table in light of all this: the README's speedup numbers were always stated as CPI upper bounds pending an fmax figure. All four configurations now land within ~79–76 MHz of each other, so frequency is roughly flat across the sweep and the CPI comparison is close to a fair proxy for throughput — but note the caches cost ~3 MHz rather than being free, and the registered read they now require costs real cycles too (the write-back CPI figures in the README rose from ~1.18 to ~2.3 as a direct result). The honest summary is that this core's cache benefit is smaller than the CPI-only table suggested, in two separate ways that only synthesis could expose.
 
