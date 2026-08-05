@@ -27,6 +27,7 @@ module backend #(
     output var logic [XLEN-1:0] ex_resolved_target,
     output var logic        trap_redirect,
     output var logic [XLEN-1:0] trap_target,
+    output var logic        icache_invalidate,   // FENCE.I committed
 
     // Predictor learning, from the EX-stage resolution.
     output var logic        bp_update_en,
@@ -67,7 +68,7 @@ module backend #(
     logic        reg_write_en_id, alu_src_id, mem_write_id, mem_read_id, branch_id, alu_a_src_id;
     logic [3:0]  alu_op_id;
     logic [1:0]  pc_src_id, wb_src_id;
-    logic        is_csr_id, is_system_id, illegal_id;
+    logic        is_csr_id, is_system_id, is_fencei_id, illegal_id;
 
     control u_control (
         .opcode(opcode_id), .funct3(funct3_id), .funct7(funct7_id),
@@ -75,7 +76,8 @@ module backend #(
         .mem_write(mem_write_id), .mem_read(mem_read_id),
         .branch(branch_id), .pc_src(pc_src_id), .wb_src(wb_src_id),
         .alu_a_src(alu_a_src_id), .alu_op(alu_op_id),
-        .is_csr(is_csr_id), .is_system(is_system_id), .illegal(illegal_id)
+        .is_csr(is_csr_id), .is_system(is_system_id), .is_fencei(is_fencei_id),
+        .illegal(illegal_id)
     );
 
     // CSR instruction operand fields (decoded in ID, used at commit in MEM).
@@ -133,6 +135,7 @@ module backend #(
         id_ex_d.ctrl.wb_src       = wb_src_id;
         id_ex_d.ctrl.is_csr       = is_csr_id;
         id_ex_d.ctrl.is_system    = is_system_id;
+        id_ex_d.ctrl.is_fencei    = is_fencei_id;
         id_ex_d.ctrl.illegal      = illegal_id;
         id_ex_d.valid             = if_id_q.valid;
         id_ex_d.predicted_taken   = if_id_q.predicted_taken;
@@ -349,6 +352,7 @@ ex_mem_t ex_mem_d, ex_mem_q;
         ex_mem_d.exc_cause    = exc_cause_ex;
         ex_mem_d.is_csr       = id_ex_q.ctrl.is_csr;
         ex_mem_d.is_system    = id_ex_q.ctrl.is_system;
+        ex_mem_d.is_fencei    = id_ex_q.ctrl.is_fencei;
         ex_mem_d.csr_addr     = id_ex_q.csr_addr;
         ex_mem_d.csr_funct3   = id_ex_q.funct3;
         ex_mem_d.csr_wdata    = csr_wdata_ex_fwd;
@@ -436,6 +440,7 @@ ex_mem_t ex_mem_d, ex_mem_q;
     // gets flushed.
     logic        trap_take;       // a synchronous trap fires this cycle
     logic        irq_take;        // an asynchronous interrupt is taken this cycle
+    logic        fencei_take;     // FENCE.I commits this cycle: flush I$ + refetch
     logic        irq_pending;
     logic [XLEN-1:0] irq_cause;
     logic [XLEN-1:0] trap_cause_w;
@@ -455,6 +460,7 @@ ex_mem_t ex_mem_d, ex_mem_q;
         mret_take    = 1'b0;
         csr_commit   = 1'b0;
         irq_take     = 1'b0;
+        fencei_take  = 1'b0;
 
         // !pipe_stall: an instruction sitting in MEM across a memory stall is
         // presented to this block every one of those cycles. Committing only on
@@ -484,6 +490,11 @@ ex_mem_t ex_mem_d, ex_mem_q;
                 mret_take    = 1'b1;
             end else if (ex_mem_q.is_csr) begin
                 csr_commit   = 1'b1;
+            end else if (ex_mem_q.is_fencei) begin
+                // Completes normally and refetches from pc+4: anything already
+                // fetched behind it may have come from the now-stale I-cache,
+                // so the redirect is the point, not a side effect.
+                fencei_take  = 1'b1;
             end else if (irq_pending) begin
                 // Lowest priority, and deliberately only on a "plain"
                 // instruction. An interrupt is level-held, so deferring it a
@@ -528,8 +539,11 @@ ex_mem_t ex_mem_d, ex_mem_q;
     );
 
     // Trap/MRET redirect target computed here; signals declared near IF.
-    assign trap_redirect = trap_take || mret_take || irq_take;
-    assign trap_target   = (trap_take || irq_take) ? mtvec_val : mepc_val;
+    assign trap_redirect     = trap_take || mret_take || irq_take || fencei_take;
+    assign icache_invalidate = fencei_take;
+    assign trap_target   = fencei_take            ? ex_mem_q.pc_plus4
+                         : (trap_take || irq_take) ? mtvec_val
+                         :                           mepc_val;
 
     // For a committing CSR instruction, the value written back to rd is the
     // OLD csr value. We fold it into the MEM-stage alu_result feeding MEM/WB,
@@ -689,13 +703,13 @@ ex_mem_t ex_mem_d, ex_mem_q;
         trap_take |-> !trap_cause_final[XLEN-1]);
     // Any redirect out of the commit point is one of exactly three causes.
     a_redirect_accounted: assert property (@(posedge clk) disable iff (rst)
-        trap_redirect |-> (trap_take || mret_take || irq_take));
+        trap_redirect |-> (trap_take || mret_take || irq_take || fencei_take));
     // A bubble never commits anything at the commit point.
     a_bubble_no_commit: assert property (@(posedge clk) disable iff (rst)
-        !ex_mem_q.valid |-> !(trap_take || mret_take || irq_take || csr_commit));
+        !ex_mem_q.valid |-> !(trap_take || mret_take || irq_take || csr_commit || fencei_take));
     // The commit point is single-issue: at most one action per cycle.
     a_commit_onehot: assert property (@(posedge clk) disable iff (rst)
-        $onehot0({trap_take, mret_take, irq_take, csr_commit}));
+        $onehot0({trap_take, mret_take, irq_take, csr_commit, fencei_take}));
 
 `endif
 

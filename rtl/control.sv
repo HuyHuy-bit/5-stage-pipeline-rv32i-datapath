@@ -18,6 +18,7 @@ module control (
     output var logic       alu_a_src,     // ALU operand A source (0=rs1, 1=pc)
     output var logic       is_csr,        // 1 = CSR read/write instruction
     output var logic       is_system,     // 1 = privileged SYSTEM op (ECALL/EBREAK/MRET)
+    output var logic       is_fencei,     // 1 = FENCE.I: drop the I-cache and refetch
     output var logic       illegal        // 1 = unrecognized/illegal instruction
 );
     // Intermediate ALU decode mode - collapses the opcode-level decision
@@ -37,6 +38,7 @@ module control (
         alu_a_src       = 1'b0;
         is_csr          = 1'b0;
         is_system       = 1'b0;
+        is_fencei       = 1'b0;
         illegal         = 1'b0;
         alu_decode_mode = ALU_ADD;
 
@@ -94,6 +96,11 @@ module control (
                 alu_decode_mode = ALU_ADD;
             end
             OPCODE_FENCE: begin
+                // FENCE is a no-op on this core (in-order, single hart, no
+                // store buffer - there is nothing to order). FENCE.I is not:
+                // split I$/D$ with no coherence means a store to code space
+                // is invisible to fetch until the I-cache is dropped.
+                if (funct3 == F3_FENCEI) is_fencei = 1'b1;
             end
             OPCODE_SYSTEM: begin
                 if (funct3 == F3_PRIV) begin

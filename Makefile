@@ -38,10 +38,10 @@ endif
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
 
-TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl t16_irq_timer t17_irq_mret t18_trap_causes t19_dcache_evict t20_ras_multi_caller t21_gshare_correlated
+TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl t16_irq_timer t17_irq_mret t18_trap_causes t19_dcache_evict t20_ras_multi_caller t21_gshare_correlated t22_fencei
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
-.PHONY: all sim assemble test memtiming bench lint wave clean coverage soak lockstep lockstep-sim
+.PHONY: all sim assemble test memtiming bench lint wave clean coverage soak soak-lockstep lockstep lockstep-sim
 
 # Default: build, assemble, run the full suite.
 all: sim assemble test
@@ -136,6 +136,11 @@ lockstep: lockstep-sim
 SEEDS ?= 100
 soak: sim
 	./tools/soak.sh $(SEEDS)
+
+# Random programs compared against Spike instead of the Python model, which
+# is what lets them contain branches and jumps (see tools/soak_lockstep.sh).
+soak-lockstep: lockstep-sim
+	./tools/soak_lockstep.sh $(SEEDS)
 
 clean:
 	rm -rf obj_dir obj_dir_L* obj_dir_ic* obj_dir_memtiming obj_dir_cov obj_dir_lockstep coverage tests/*.hex tests/*.vcd cpu.vcd

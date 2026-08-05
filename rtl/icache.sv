@@ -25,6 +25,13 @@ module icache #(
     input  var logic        clk,
     input  var logic        rst,
 
+    // FENCE.I: drop every cached line so the next fetch of any address goes
+    // back to memory. Only ever pulsed from the MEM commit point, which is
+    // gated on !pipe_stall and therefore cannot coincide with a refill (a
+    // refill holds imem_ready low, which *is* pipe_stall) - so this doesn't
+    // need to abort an in-flight fill.
+    input  var logic        invalidate,
+
     // CPU side
     input  var logic [XLEN-1:0] addr,
     output var logic [ILEN-1:0] instr,
@@ -60,7 +67,6 @@ module icache #(
         end
     end
 
-    logic [ILEN-1:0]  data  [WAYS][SETS][BLOCK_WORDS];
     logic [TAGW-1:0]  tag   [WAYS][SETS];
     logic             vld   [WAYS][SETS];
     logic [WAYW-1:0]  victim[SETS];
@@ -98,14 +104,48 @@ module icache #(
     logic hit;
     assign hit = |way_hit;
 
-    // Registered read: a combinational `assign instr = data[...]` infers
-    // distributed RAM/flops instead of Block RAM on Xilinx parts (7-series
-    // BRAM has no async-read mode) - see the matching comment in dcache.sv.
-    // Every fetch is a read (this cache never writes on the hit path), so
-    // every hit costs the one extra cycle for the registered read to catch
-    // up, tracked the same way dcache.sv tracks a load hit.
+    // ---- data storage: WAYS parallel single-way banks ----
+    // One flat [SETS*BLOCK_WORDS] array per way, read together and muxed
+    // *after* the register - not one [WAYS][SETS][BLOCK_WORDS] array indexed
+    // by a runtime way select. The 3D-array-plus-way-mux form matches no BRAM
+    // inference template on Xilinx parts and synthesizes to flip-flops even
+    // with the read registered; dcache.sv proved that the hard way (65,600 ->
+    // 17,106 LUT from this restructuring alone). This is also just how a real
+    // set-associative data array is built, so it's the right shape, not a
+    // synthesis workaround.
+    //
+    // Simpler than dcache.sv's version in one respect: this cache is read-only
+    // on the hit path, so a refill is the *only* writer and there is no second
+    // write address to mux against. The "one physical write address per BRAM
+    // port" constraint that forced dcache.sv's unified write port is satisfied
+    // here by construction.
+    localparam int WORDS = SETS * BLOCK_WORDS;
+    localparam int AW    = (WORDS <= 1) ? 1 : $clog2(WORDS);
+
+    logic [AW-1:0] rd_addr, wr_addr;
+    assign rd_addr = AW'(idx      * BLOCK_WORDS + 32'(off));
+    assign wr_addr = AW'(idx      * BLOCK_WORDS + 32'(fill_word));
+
+    logic fill_en;
+    assign fill_en = refilling && mem_ready;
+
+    logic [ILEN-1:0] way_rd_reg [WAYS];
+    for (genvar w = 0; w < WAYS; w++) begin : g_way
+        (* ram_style = "block" *) logic [ILEN-1:0] way_mem [0:WORDS-1];
+        always_ff @(posedge clk) begin
+            if (fill_en && (fill_way == WAYW'(w))) way_mem[wr_addr] <= mem_instr;
+            way_rd_reg[w] <= way_mem[rd_addr];
+        end
+    end
+
+    // The way select has to be delayed to land on the same cycle as the
+    // registered read it corresponds to - the read is one cycle behind the
+    // hit_way that produced its address.
+    logic [WAYW-1:0] hit_way_reg;
+    always_ff @(posedge clk) hit_way_reg <= hit_way;
+
     logic [ILEN-1:0] data_rd_reg;
-    always_ff @(posedge clk) data_rd_reg <= data[hit_way][idx][off];
+    assign data_rd_reg = way_rd_reg[hit_way_reg];
 
     // ready must be level, not a pulse: whether the pipeline actually
     // advances next cycle also depends on the D-cache, which can hold
@@ -161,6 +201,14 @@ module icache #(
                 end
             end
             for (int s = 0; s < SETS; s++) victim[s] <= '0;
+        end else if (invalidate) begin
+            // Valid bits only: the tag/data arrays can keep their contents,
+            // since nothing can hit on them again until a refill rewrites the
+            // tag. Clearing one bit per line instead of the whole tag array is
+            // what keeps this a flop-array reset and not a BRAM walk.
+            for (int w = 0; w < WAYS; w++) begin
+                for (int s = 0; s < SETS; s++) vld[w][s] <= 1'b0;
+            end
         end else if (!refilling) begin
             if (!hit) begin
                 refilling <= 1'b1;
@@ -168,7 +216,7 @@ module icache #(
                 fill_way  <= victim[idx];
             end
         end else if (mem_ready) begin
-            data[fill_way][idx][fill_word] <= mem_instr;
+            // the data word itself is written by the per-way block above
             if (fill_word == OFFW'(BLOCK_WORDS - 1)) begin
                 // Claim the line only once the whole block is present, so a
                 // partially filled block can never be read as a hit.

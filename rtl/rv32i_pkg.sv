@@ -51,6 +51,7 @@ package rv32i_pkg;
     localparam logic [6:0] OPCODE_LUI    = 7'b0110111;
     localparam logic [6:0] OPCODE_AUIPC  = 7'b0010111;
     localparam logic [6:0] OPCODE_FENCE  = 7'b0001111;
+    localparam logic [2:0] F3_FENCEI     = 3'b001;   // FENCE.I vs FENCE (3'b000)
 
     // ---- ALU operation codes (control.sv -> alu.sv, the alu_op field) ----
     localparam logic [3:0] ALU_OP_ADD  = 4'b0000;
@@ -216,6 +217,7 @@ package rv32i_pkg;
         logic [1:0] wb_src;
         logic       is_csr;
         logic       is_system;
+        logic       is_fencei;
         logic       illegal;
     } ctrl_t;
 
@@ -252,7 +254,7 @@ package rv32i_pkg;
         logic [XLEN-1:0] pc;
         logic            exc_pending;
         logic [XLEN-1:0] exc_cause;
-        logic        is_csr, is_system;
+        logic        is_csr, is_system, is_fencei;
         logic [11:0] csr_addr;
         logic [2:0]  csr_funct3;
         logic [XLEN-1:0] csr_wdata, csr_rdata;

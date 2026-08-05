@@ -33,6 +33,7 @@ module frontend #(
     input  var logic [XLEN-1:0] ex_resolved_target,
     input  var logic        trap_redirect,
     input  var logic [XLEN-1:0] trap_target,
+    input  var logic        icache_invalidate,   // FENCE.I committed in MEM
 
     // Predictor learning, from the EX-stage resolution.
     input  var logic        bp_update_en,
@@ -65,6 +66,10 @@ module frontend #(
         assign instr_if     = ic_mem_instr;
         assign imem_ready   = ic_mem_ready;
         assign icache_miss  = 1'b0;
+        // No cache to invalidate: fetch already goes straight to memory, so
+        // FENCE.I is a no-op here rather than being silently wrong.
+        logic unused_inval;
+        assign unused_inval = icache_invalidate;
     end else begin : g_icache
         icache #(
             .BYTES(ICACHE_BYTES),
@@ -72,6 +77,7 @@ module frontend #(
             .WAYS(ICACHE_WAYS)
         ) u_icache (
             .clk(clk), .rst(rst),
+            .invalidate(icache_invalidate),
             .addr(pc_out), .instr(instr_if), .ready(imem_ready),
             .mem_addr(ic_mem_addr), .mem_req(ic_mem_req), .mem_burst(ic_mem_burst),
             .mem_instr(ic_mem_instr), .mem_ready(ic_mem_ready),

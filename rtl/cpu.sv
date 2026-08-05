@@ -81,6 +81,7 @@ module cpu #(
 
     // Counter observations.
     logic icache_miss, dcache_access, dcache_miss, retired, mispredicted;
+    logic icache_invalidate;
 
     frontend #(
         .ICACHE_BYTES(ICACHE_BYTES),
@@ -98,6 +99,7 @@ module cpu #(
         .load_use_stall(load_use_stall),
         .ex_flush(ex_flush), .ex_resolved_target(ex_resolved_target),
         .trap_redirect(trap_redirect), .trap_target(trap_target),
+        .icache_invalidate(icache_invalidate),
         .bp_update_en(bp_update_en), .bp_update_pc(bp_update_pc),
         .bp_update_taken(bp_update_taken), .bp_update_target(bp_update_target),
         .bp_update_ghistory(bp_update_ghistory),
@@ -117,6 +119,7 @@ module cpu #(
         .load_use_stall(load_use_stall),
         .ex_flush(ex_flush), .ex_resolved_target(ex_resolved_target),
         .trap_redirect(trap_redirect), .trap_target(trap_target),
+        .icache_invalidate(icache_invalidate),
         .bp_update_en(bp_update_en), .bp_update_pc(bp_update_pc),
         .bp_update_taken(bp_update_taken), .bp_update_target(bp_update_target),
         .bp_update_ghistory(bp_update_ghistory),
