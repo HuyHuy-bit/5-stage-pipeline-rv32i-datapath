@@ -33,6 +33,7 @@ module backend #(
     output var logic [XLEN-1:0] bp_update_pc,
     output var logic        bp_update_taken,
     output var logic [XLEN-1:0] bp_update_target,
+    output var logic [GHIST_BITS-1:0] bp_update_ghistory,
 
     output var logic        dmem_ready,       // 0 = data side is stalling the pipe
     output var logic        dcache_access,
@@ -136,6 +137,7 @@ module backend #(
         id_ex_d.valid             = if_id_q.valid;
         id_ex_d.predicted_taken   = if_id_q.predicted_taken;
         id_ex_d.predicted_target  = if_id_q.predicted_target;
+        id_ex_d.predict_ghistory  = if_id_q.predict_ghistory;
         id_ex_d.csr_addr          = csr_addr_id;
         id_ex_d.csr_wdata         = csr_wdata_id;
         id_ex_d.instr             = if_id_q.instr;
@@ -265,10 +267,11 @@ module backend #(
     // Not while frozen - ID/EX holds, so the same branch would be presented
     // for as many cycles as the stall lasts and its saturating counter would
     // be driven to the rail by a single resolution.
-    assign bp_update_en     = id_ex_q.valid && is_cf_instr && !pipe_stall;
-    assign bp_update_pc     = id_ex_q.pc;
-    assign bp_update_taken  = actual_taken;
-    assign bp_update_target = actual_target;
+    assign bp_update_en        = id_ex_q.valid && is_cf_instr && !pipe_stall;
+    assign bp_update_pc        = id_ex_q.pc;
+    assign bp_update_taken     = actual_taken;
+    assign bp_update_target    = actual_target;
+    assign bp_update_ghistory  = id_ex_q.predict_ghistory;
 
     // CSRRW(I) always writes; CSRRS/CSRRC(I) only when the operand is
     // nonzero (rs1 field doubles as the 5-bit uimm for the *I variants, so

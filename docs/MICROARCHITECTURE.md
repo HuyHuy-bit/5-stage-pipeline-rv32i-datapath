@@ -36,10 +36,38 @@ Each entry: what was chosen, the alternative, what it costs, and the evidence.
 **Chosen:** both caches use a simple round-robin/FIFO victim pointer per set (`ponytail:` comments in `icache.sv` and `dcache.sv`). **Alternative:** true LRU. **Cost:** for the associativities actually swept in this project (1-4 way), the plan predicts the difference is usually small for a 2-way cache — that's a real, cheap-to-run finding this pass didn't get to. Not measured here.
 
 ### Single MEM commit point for precise exceptions
-**Chosen:** every control-flow-changing exceptional event (trap, MRET, CSR write) resolves at one point, in MEM, in program order. **Alternative:** none seriously — this is what makes the exception model precise "for free" (see `cpu.sv`'s commit-point comment) rather than needing a reorder buffer. **Cost:** none beyond what precise exceptions cost anywhere: the offending and every younger instruction must be flushable, which is why `valid` is threaded through every pipeline register. This is the foundation the 13 SVA assertions and the directed exception tests (`t09`–`t15`) check.
+**Chosen:** every control-flow-changing exceptional event (trap, MRET, CSR write) resolves at one point, in MEM, in program order. **Alternative:** none seriously — this is what makes the exception model precise "for free" (see `cpu.sv`'s commit-point comment) rather than needing a reorder buffer. **Cost:** none beyond what precise exceptions cost anywhere: the offending and every younger instruction must be flushable, which is why `valid` is threaded through every pipeline register. This is the foundation the 25 SVA assertions and the directed exception tests (`t09`–`t18`) check.
 
 ### BTB-gated prediction (never predicts taken until a first taken hit)
 **Chosen:** a branch is only ever predicted taken after the BTB has already recorded a taken outcome for it — the first execution of any branch is always predicted not-taken. **Cost:** every branch pays a guaranteed misprediction on its first taken occurrence; measured indirectly in the `bpred: accuracy=` figures already reported per test/kernel.
+
+### Return-address stack, speculative and unrepaired
+
+**Chosen:** `ras.sv` — a small (default 8-entry) LIFO, pushed with `pc+4` on a call (`JAL`/`JALR` with a link `rd`, per the RISC-V hint convention) and popped to predict a matching `JALR` return (link `rs1`). It sits alongside the BTB in `frontend.sv` and wins whenever it has a valid answer; an empty stack falls back to the plain BTB prediction. The reason it exists at all: a BTB indexes purely by PC, so a `ret` shared by multiple call sites can only ever cache the *most recent* caller's address — every other caller's return mispredicts by construction, regardless of how well-trained the BTB otherwise is.
+
+**Cost — measured, not assumed:** [`tests/t20_ras_multi_caller.s`](../tests/t20_ras_multi_caller.s) calls one subroutine from three call sites, five times each. Built twice, same program:
+
+| | Branches | Mispredicts | Accuracy | Cycles | CPI |
+|---|---|---|---|---|---|
+| `RAS_DEPTH=0` (BTB only) | 35 | 20 | 42.9% | 117 | 1.60 |
+| `RAS_DEPTH=8` (default) | 35 | 7 | **80.0%** | 91 | **1.25** |
+
+The 7 remaining mispredicts with RAS enabled aren't noise — they're the RAS's own honest limitation surfacing. Push/pop happen speculatively at fetch time, before the pipeline knows whether the fetch is even on the correct path, and a misprediction flush does not roll the stack back. Concretely here: the *first* call to `sub` is a cold BTB miss (predicted not-taken, since nothing has trained that entry yet), so fetch continues down the wrong (fall-through) path for the 1-2 cycles before EX resolves and flushes it — and in a tight, unrolled call sequence like this test, that wrong-path fetch window can itself contain the *next* call site, pushing a premature entry onto the RAS before the real call gets there. This is the same category of accepted simplification as the BTB's own uncheckpointed state (see below) and the FIFO cache victim policy — a real, occasionally-corrupting cost, disclosed rather than hidden, and still a decisive net win over no RAS at all.
+
+None of the five C benchmark kernels in `bench/` exercise multi-site calls meaningfully (they're loop-dominated, not call-heavy), so the CPI table in the README doesn't move much at RAS's default-on setting — the win here is real but specific to call/return-heavy code, which is exactly what the directed microbenchmark above was built to isolate.
+
+### Optional gshare direction predictor (`GSHARE=1`)
+
+**Chosen:** the BHT's 2-bit counters are normally indexed by PC alone (bimodal — one counter per branch, independent of any other branch's outcome). `GSHARE=1` indexes by `PC XOR global_history` instead, so the *same* branch gets a different counter per recent global outcome pattern. The BTB (tag/target) stays PC-indexed either way — a branch's target doesn't depend on history, only its direction does. The exact history value used for each prediction travels with that instruction through `if_id_t`/`id_ex_t` (`predict_ghistory`, `GHIST_BITS` wide) and is replayed at update time, so a second in-flight branch's history update can't corrupt the wrong table entry — the live `ghistory` register may already have shifted past what was used for an older in-flight prediction by the time it resolves.
+
+**Cost — measured:** bimodal only helps when a branch is predictable *from its own past*. [`tests/t21_gshare_correlated.s`](../tests/t21_gshare_correlated.s) builds two branches where the second's direction is fully determined by the first's outcome one loop iteration earlier — in isolation (ignoring history), branch 2's own sequence is a plain period-4 pattern, exactly the kind of case where correlation across branches, not within one, matters:
+
+| | Branches | Mispredicts | Accuracy | Cycles | CPI |
+|---|---|---|---|---|---|
+| `GSHARE=0` (bimodal, default) | 120 | 61 | 49.2% | 491 | 1.35 |
+| `GSHARE=1` | 120 | 16 | **86.7%** | 401 | **1.10** |
+
+Bimodal lands near chance (49.2%) because it genuinely cannot see the correlation — its one counter per PC has no way to distinguish "branch 1 was just taken" from "branch 1 was just not-taken" contexts for branch 2. Off by default because real code's branch-correlation profile varies enough that it isn't a strict win the way the RAS is — it's a real, measured option, not a default recommendation, which is exactly why the plan called for it to be selectable rather than always-on.
 
 ### A structural read-only-CSR convention, not a hand-maintained permission table
 **Chosen:** CSR write permission is derived from address bits `[11:10] == 2'b11` (the standard RISC-V convention), rather than a per-CSR read/write flag. **Cost:** none found — this is a case where following the spec's own structural convention was strictly simpler than the alternative, not a trade-off with a real downside.

@@ -28,6 +28,15 @@ package rv32i_pkg;
     // and lsu.sv, not a width change. See docs/MICROARCHITECTURE.md.
     localparam int XLEN   = 32;
     localparam int ILEN   = 32;
+
+    // Global branch history width, for the optional gshare direction
+    // predictor in branch_predictor.sv. Lives here rather than as a module
+    // parameter because if_id_t/id_ex_t below need to size a field by it: a
+    // gshare table index is a function of history, so the exact history
+    // value used to make a prediction has to travel with that instruction
+    // through the pipeline and be replayed at update time, or a second
+    // in-flight branch's history update would corrupt the wrong table entry.
+    localparam int GHIST_BITS = 6;
     localparam int XBYTES = XLEN / 8;              // byte lanes per data word
     localparam int XOFFW  = (XBYTES <= 1) ? 1 : $clog2(XBYTES);  // byte-offset width
 
@@ -216,6 +225,7 @@ package rv32i_pkg;
         logic            valid;
         logic            predicted_taken;
         logic [XLEN-1:0] predicted_target;
+        logic [GHIST_BITS-1:0] predict_ghistory;
     } if_id_t;
 
     typedef struct packed {
@@ -226,6 +236,7 @@ package rv32i_pkg;
         logic        valid;
         logic        predicted_taken;
         logic [XLEN-1:0] predicted_target;
+        logic [GHIST_BITS-1:0] predict_ghistory;
         logic [11:0]     csr_addr;
         logic [XLEN-1:0] csr_wdata;
         logic [ILEN-1:0] instr;

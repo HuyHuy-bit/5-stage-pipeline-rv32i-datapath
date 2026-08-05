@@ -6,7 +6,7 @@ CPU_SRCS = rtl/rv32i_pkg.sv \
            rtl/cpu.sv rtl/frontend.sv rtl/backend.sv rtl/pc.sv rtl/instr_mem.sv rtl/reg_file.sv rtl/imm_gen.sv \
            rtl/alu.sv rtl/control.sv rtl/data_mem.sv rtl/branch_unit.sv \
            rtl/if_id_reg.sv rtl/id_ex_reg.sv rtl/ex_mem_reg.sv rtl/mem_wb_reg.sv \
-           rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/csr.sv \
+           rtl/forwarding_unit.sv rtl/hazard_detect.sv rtl/branch_predictor.sv rtl/ras.sv rtl/csr.sv \
            rtl/mem_timing.sv rtl/icache.sv rtl/lsu.sv rtl/dcache.sv rtl/perf_counters.sv
 
 # Cache/latency configuration. Defaults match the plain no-cache build so
@@ -38,7 +38,7 @@ endif
 SIM      = $(OBJDIR)/V$(TOP)
 ASM      = python3 tools/asm.py
 
-TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl t16_irq_timer t17_irq_mret t18_trap_causes t19_dcache_evict
+TESTS    = t01_rtype t02_itype t03_memory t04_branch t05_jump t06_lui_auipc t07_load_use t08_loop t09_trap_illegal t10_misaligned t11_mret t12_misaligned_fetch t13_csr_ext t14_csr_illegal t15_csr_unimpl t16_irq_timer t17_irq_mret t18_trap_causes t19_dcache_evict t20_ras_multi_caller t21_gshare_correlated
 HEXFILES = $(patsubst %,tests/%.hex,$(TESTS))
 
 .PHONY: all sim assemble test memtiming bench lint wave clean coverage soak lockstep lockstep-sim

@@ -15,7 +15,7 @@ Next-PC priority: `freeze > trap > mispredict > load-use stall > predict > +4`. 
 | **ISA** | RV32I base integer, M-mode only |
 | **Pipeline** | 5-stage in-order (IF/ID/EX/MEM/WB), single issue |
 | **Hazards** | EX/MEM + MEM/WB forwarding; 1-cycle stall on load-use |
-| **Branch prediction** | 64-entry BTB + 2-bit saturating counters, resolved in EX (2-cycle penalty) |
+| **Branch prediction** | 64-entry BTB + 2-bit saturating counters, resolved in EX (2-cycle penalty); optional gshare direction table (`GSHARE=1`); 8-entry return-address stack, on by default |
 | **Exceptions** | Precise, single commit point in MEM. Illegal instruction, misaligned load/store/fetch, `ECALL`/`EBREAK`, `MRET`, illegal CSR access |
 | **CSRs** | `mstatus` `mie` `mip` `mtvec` `mepc` `mcause` `mscratch` `mtval` `misa` `mvendorid` `marchid` `mimpid` `mhartid` `mcycle` `minstret` |
 | **Caches** | Parameterised I$ and D$ — capacity, block size, associativity, write-through/no-allocate or write-back/write-allocate |

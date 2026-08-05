@@ -14,6 +14,13 @@ module cpu #(
     parameter int DCACHE_BLOCK_WORDS = 4,
     parameter int DCACHE_WAYS        = 1,
     parameter int DCACHE_WRITE_BACK  = 0,
+    // Branch predictor: BTB size/tag, direction-table hash (0=bimodal,
+    // 1=gshare), and the return-address-stack depth. See branch_predictor.sv
+    // and ras.sv.
+    parameter int BTB_IDX_BITS       = 6,
+    parameter int BTB_TAG_BITS       = 10,
+    parameter int GSHARE             = 0,
+    parameter int RAS_DEPTH          = 8,
     // Reset vector. 0 for every normal build; the lockstep flow overrides it
     // so the RTL's PC matches the address Spike's memory map forces programs
     // to link at (see tools/lockstep.py).
@@ -70,6 +77,7 @@ module cpu #(
     logic [XLEN-1:0] ex_resolved_target, trap_target;
     logic        bp_update_en, bp_update_taken;
     logic [XLEN-1:0] bp_update_pc, bp_update_target;
+    logic [GHIST_BITS-1:0] bp_update_ghistory;
 
     // Counter observations.
     logic icache_miss, dcache_access, dcache_miss, retired, mispredicted;
@@ -80,7 +88,11 @@ module cpu #(
         .ICACHE_WAYS(ICACHE_WAYS),
         .IMEM_LATENCY(IMEM_LATENCY),
         .IMEM_DEPTH_WORDS(IMEM_DEPTH_WORDS),
-        .RESET_PC(RESET_PC)
+        .RESET_PC(RESET_PC),
+        .BTB_IDX_BITS(BTB_IDX_BITS),
+        .BTB_TAG_BITS(BTB_TAG_BITS),
+        .GSHARE(GSHARE),
+        .RAS_DEPTH(RAS_DEPTH)
     ) u_frontend (
         .clk(clk), .rst(rst), .pipe_stall(pipe_stall),
         .load_use_stall(load_use_stall),
@@ -88,6 +100,7 @@ module cpu #(
         .trap_redirect(trap_redirect), .trap_target(trap_target),
         .bp_update_en(bp_update_en), .bp_update_pc(bp_update_pc),
         .bp_update_taken(bp_update_taken), .bp_update_target(bp_update_target),
+        .bp_update_ghistory(bp_update_ghistory),
         .if_id_q(if_id_q), .imem_ready(imem_ready), .icache_miss(icache_miss)
     );
 
@@ -106,6 +119,7 @@ module cpu #(
         .trap_redirect(trap_redirect), .trap_target(trap_target),
         .bp_update_en(bp_update_en), .bp_update_pc(bp_update_pc),
         .bp_update_taken(bp_update_taken), .bp_update_target(bp_update_target),
+        .bp_update_ghistory(bp_update_ghistory),
         .dmem_ready(dmem_ready),
         .dcache_access(dcache_access), .dcache_miss(dcache_miss),
         .retired(retired), .mispredicted(mispredicted),
