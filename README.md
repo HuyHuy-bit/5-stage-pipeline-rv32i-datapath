@@ -63,7 +63,7 @@ Three findings from the geometry sweeps (measured pre-BRAM-rework; the qualitati
 
 | Mechanism | Coverage |
 |---|---|
-| Directed tests | 19, one per hazard/instruction-class/trap scenario; `tohost` end-of-test |
+| Directed tests | 21, one per hazard/instruction-class/trap/predictor scenario; `tohost` end-of-test |
 | Compliance | `riscv-arch-test` `rv32i_m/I` — **38/38** |
 | Spike lockstep | Same 38, compared instruction-by-instruction — **38/38** |
 | CI matrix | Directed suite × 6 cache/latency configs per push; result must be invariant to cache config |
@@ -103,6 +103,8 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 - **Passing your own tests and being *correct* are different claims.** The compliance suite exists because directed tests, however careful, reflect the blind spots of whoever wrote them. Running against an external, independently-generated reference is what turns "I believe this works" into "this is verified."
 - **A test that ends by guessing isn't a test.** Runs used to stop when the PC stopped moving, which cannot tell "finished" from "spinning" or "stalled". Switching to a `tohost` store made termination deterministic — and immediately broke eight tests, because inserting those instructions shifted every trap handler they located by a hardcoded byte offset. The heuristic had been hiding how fragile the tests were.
 - **Simulation hides the cost of memory.** A combinational array read is free in Verilator and impossible in a Block RAM. Synthesis turned a "1.18 CPI" cache into a 2.3 CPI cache and a silent 3.2×-over-budget design into one that fits — neither fact was visible from any amount of simulation.
+- **An interrupt and a trap resume at different addresses, and that's easy to get backwards.** A trap re-runs the faulting instruction (`mepc = pc`); an interrupt lets the instruction in flight complete and resumes after it (`mepc = pc+4`). Swap them and every interrupt either duplicates or silently drops one instruction — invisible in any test that doesn't specifically check `mepc` against the *right* one of those two.
+- **A "critical path" name in a synthesis report isn't automatically the real one.** The first re-synthesis after adding interrupts pointed at a plausible-looking chain (a 64-bit timer comparator feeding the PC redirect mux); fixing it *did* measurably shrink that exact chain (logic delay ↓31%, carry-chain length halved) but moved fmax by only +0.45%, because a second, route-dominated path was waiting to take over. The fix was real and worth keeping; the lesson is that "the" bottleneck in a small, congested build is often several similarly-bad paths, not one.
 
 ## Limitations
 
@@ -110,6 +112,6 @@ Synthesis scripts are in [`syn/`](syn/); see [`syn/build.tcl`](syn/build.tcl) fo
 - **The pipeline freezes globally on a memory stall** rather than letting the back end drain through a fetch miss. It inflates cached and uncached numbers alike, so it doesn't manufacture a speedup — but a decoupled front end would make the I-cache look less essential than it does here.
 - **The I-cache and backing memories still don't use Block RAM.** The D-cache pattern applies directly; not done because the I-cache already fit.
 - **No `FENCE.I`.** Split I$/D$ with no coherence, so self-modifying code can read stale instructions. No test or benchmark here does that.
-- **Random testing covers ALU/load-store only** — no branches, traps, or CSRs, because the Python reference model doesn't interpret them. Spike lockstep would close this.
+- **Random testing covers ALU/load-store only** — no branches, traps, or CSRs, because the Python reference model doesn't interpret them. Spike lockstep exists now (`make lockstep`, 38/38) but runs the fixed compliance programs, not random ones; closing this gap means pointing the random generator at Spike instead of the Python model, not adding lockstep itself.
 
 [`docs/MICROARCHITECTURE.md`](docs/MICROARCHITECTURE.md) has the full spec: every trade-off with its measured cost, the hazard/exception model, and the complete synthesis progression.
